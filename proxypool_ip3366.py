@@ -53,4 +53,6 @@ if __name__ == "__main__":
 
     ips["ping"] = ips.apply(ping, axis=1)
     ips.sort_values(by="ping", inplace=True, ascending=True)
-    print(ips[ips["ping"] != -1].to_csv("proxypool.csv", index=False))
+    ips_ture = ips[ips["ping"] != -1]
+    print(ips_ture)
+    ips_ture.to_csv("proxypool.csv", index=False)

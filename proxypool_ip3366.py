@@ -21,15 +21,16 @@ def draw(url, i):
         "/html/body/section/section/div[2]/table/tbody")
     ips = [
         pd.DataFrame([
+            # 提取网页内ip
             tbody.xpath("./tr/td[1]/text()"),
             tbody.xpath("./tr/td[2]/text()"),
             tbody.xpath("./tr/td[3]/text()"),
             tbody.xpath("./tr/td[4]/text()"),
             tbody.xpath("./tr/td[5]/text()")
         ],
-                     index=["ip", "port", "anmt", "http", "place"]).T
+                     index=["ip", "port", "anmt", "http", "place"]).T # 设置表头和倒置
         for tbody in tbodys
-    ][0].drop_duplicates()
+    ][0].drop_duplicates()# 删除重复
 
     ips["ping"] = ips.apply(ping, axis=1)
     return ips
@@ -39,7 +40,7 @@ def draw(url, i):
 def ping(self):
     try:
         stime = time.time()
-        test = tn.Telnet(self["ip"], port=self["port"], timeout=5)
+        test = tn.Telnet(self["ip"], port=self["port"], timeout=5)#ping
         etime = time.time()
         print(self["ip"], self["port"], "YES")
         test.close()

@@ -21,7 +21,7 @@ import os
 6.根据密钥，异步解密ts文件
     #key.key --> icGs5jKF.ts...ts_file
 7.使用os命令合并ts文件
-    #copy \b 1.ts+2.ts+...x.ts
+    #copy \\b 1.ts+2.ts+...x.ts
 """
 
 
@@ -113,7 +113,8 @@ async def aio_dec(key, ts_list, path_ts, path_temp):
 #合并解密后的文件
 def merge_ts(path_temp, name):
     #windows
-    os.system(f'copy /b {path_temp}* {name}.mp4')
+    os.system(f'copy /B {path_temp}\*.ts {name}.mp4')
+    # print(f'copy {path_temp}/*.ts {name}.mp4')
 
 
 if __name__ == '__main__':
@@ -135,7 +136,7 @@ if __name__ == '__main__':
 
     #4.异步下载ts文件
     print("正在下载ts文件，请稍等...")
-    ts_path = "./video_ts"
+    ts_path = ".\\video_ts"
     os.makedirs(ts_path) if not os.path.exists(ts_path) else print(
         f"将下载到：{ts_path}")
     asyncio.get_event_loop().run_until_complete(aio_download(ts_list, ts_path))
@@ -145,7 +146,7 @@ if __name__ == '__main__':
     key = get_key(key_url, headers)
 
     #6.解密ts文件
-    temp_path = "./video_temp"
+    temp_path = ".\\video_temp"
     os.makedirs(temp_path) if not os.path.exists(temp_path) else print(
         f"将下载到：{temp_path}")
     asyncio.run(aio_dec(key, ts_list, ts_path, temp_path))

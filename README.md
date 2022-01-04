@@ -20,6 +20,11 @@
 ### 改进方向：
   * 增加自定义职位搜索、城市选择
 
+
+## Spiders/login_12306.py
+简单的selenum练习，需要反反爬，创建事件链等操作
+
+
 ## Spiders/m3u8_downloader.py
 muu8解析器，涉及多json解析，js加密，异步爬虫，大批量文件合并等技术，还挺麻烦
 

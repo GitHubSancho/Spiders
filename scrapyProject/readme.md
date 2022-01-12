@@ -108,14 +108,3 @@
 			request.meta['proxy'] = random.choice(self.IP池) # 注意判断http和https协议头
 			return request # 重新发送修改后的请求
 		开启中间件：在settings.py中启用DOWNLOADER_MIDDLEWARES项
-
-### CrawlSpider类
-	Spider的一个子类
-	基于全站数据爬取的方式
-	CrawlSpider使用
-		创建工程
-		切换到工程目录：cd spiderProject
-		创建CrawSpider爬虫文件：scrapy genspider -t crawl spiderName www.xxx.com 
-		新导入的类解释：
-			LinkExtractor：链接提取器，根据指定规则(allow=r'正则')进行指定链接的提取
-			Rule:规则解析器,根据LinkExtractor提取到的链接进行指定规则(callback)的解析操作，follw=是否循环将提取器作用到子页面

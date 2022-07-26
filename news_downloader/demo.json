@@ -1,0 +1,4 @@
+{
+    "pending_threshold": 10,
+    "failure_threshold": 3
+}

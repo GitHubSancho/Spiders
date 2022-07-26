@@ -1,4 +1,5 @@
 {
     "pending_threshold": 10,
-    "failure_threshold": 3
+    "failure_threshold": 3,
+    "hub_refresh_span": 0
 }

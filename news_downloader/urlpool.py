@@ -4,12 +4,11 @@
 #CREATE_TIME: 2022-07-25
 #AUTHOR: Sancho
 """
-网址池实现
+网址池
 """
 
 from multiprocessing import pool
 import pickle
-import pymongo
 import time
 import json
 import sys
@@ -58,39 +57,10 @@ class UrlPool:
             }
         }
         """
-        self.load_ini()  # 读取配置文件
-        self.load_cache()  # 读取上次未完成抓取网址的数据
+        self._load_ini()  # 读取配置文件
+        self._load_cache()  # 读取上次未完成抓取网址的数据
 
-    def __del__(self):
-        """退出时自动调用写入缓存"""
-        self.dump_cache()
-
-    def load_cache(self, ):
-        """读取上次未完成抓取网址的数据"""
-        path = self.path + '.pkl'
-        try:
-            with open(path, 'rb') as f:
-                self.pool = pickle.load(f)
-                print('load:')
-                print(self.pool)
-        except:
-            pass
-
-    def dump_cache(self):
-        """写入缓存"""
-        path = self.path + '.pkl'
-        try:
-            with open(path, 'wb') as f:
-                for host in self.pool.keys():  # 删除不保存的值
-                    for url in self.pool[host]:
-                        if self.pool[host][url]['status'] != 'waiting':
-                            self.pool[host].pop(url)
-                pickle.dump(self.pool, f)  # 将未完成抓取的网址，序列化写入硬盘
-            print('saved!')
-        except:
-            pass
-
-    def load_ini(self):
+    def _load_ini(self):
         """读取配置文件"""
         path = self.path + '.json'  # 当前文件目录下
         try:
@@ -107,6 +77,35 @@ class UrlPool:
                 }
                 json.dump(myini, f)
                 self.ini = json.loads(myini)
+        except:
+            pass
+
+    def __del__(self):
+        """退出时自动调用写入缓存"""
+        self._dump_cache()
+
+    def _load_cache(self, ):
+        """读取上次未完成抓取网址的数据"""
+        path = self.path + '.pkl'
+        try:
+            with open(path, 'rb') as f:
+                self.pool = pickle.load(f)
+                print('load:')
+                print(self.pool)
+        except:
+            pass
+
+    def _dump_cache(self):
+        """写入缓存"""
+        path = self.path + '.pkl'
+        try:
+            with open(path, 'wb') as f:
+                for host in self.pool.keys():  # 删除不保存的值
+                    for url in self.pool[host]:
+                        if self.pool[host][url]['status'] != 'waiting':
+                            self.pool[host].pop(url)
+                pickle.dump(self.pool, f)  # 将未完成抓取的网址，序列化写入硬盘
+            print('saved!')
         except:
             pass
 

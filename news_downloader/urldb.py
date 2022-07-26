@@ -4,7 +4,7 @@
 #CREATE_TIME: 2022-07-25
 #AUTHOR: Sancho
 """
-网址数据库实现
+数据库相关操作
 """
 
 import pymongo
@@ -65,4 +65,4 @@ class UrlDB:
 
 if __name__ == "__main__":
     db = UrlDB("demo", "127.0.0.1", "27017")
-    print(db.myset)
+    print(db)

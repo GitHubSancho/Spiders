@@ -7,6 +7,7 @@
 pymongo的轻量级封装
 """
 
+from cProfile import run
 import time
 import logging
 import traceback
@@ -105,6 +106,7 @@ class Connection(object):
         self.timeoutMS = timeout * 1000
         self._last_use_time = time.time()
         self.db = None
+        self.cursor = None
 
         if user:
             self.user = parse.quote_plus(user)
@@ -150,6 +152,20 @@ class Connection(object):
                           self.host,
                           exc_info=True)
 
+    def set_database(self, database=None):
+        """设置或更换数据库"""
+        if type(database) == str:
+            self.database = database
+        self.db_database = self.db[self.database]
+        return
+
+    def set_collection(self, collection=None):
+        """设置或更换集合"""
+        if type(collection) == str:
+            self.collection = collection
+        self.db_database_collection = self.db_database[self.collection]
+        return
+
     def reconnect(self):
         """关闭打开的服务器并重新启动"""
         # self.close()
@@ -158,6 +174,8 @@ class Connection(object):
 
         self.close()
         self.db = pymongo.MongoClient(self._uri)
+        self.set_database()
+        self.set_collection()
 
     def close(self):
         """关闭数据库连接"""
@@ -165,20 +183,82 @@ class Connection(object):
             self.db.close()
             self.db = None
 
-    def _ensure_connected(self):
-        # Mysql by default closes client connections that are idle for
-        # 8 hours, but the client library does not report this fact until
-        # you try to perform a query and it fails.  Protect against this
-        # case by preemptively closing and reopening the connection
-        # if it has been idle for too long (7 hours by default).
-        if (self._db is None
-                or (time.time() - self._last_use_time > self.max_idle_time)):
-            self.reconnect()
-        self._last_use_time = time.time()
+    # def _ensure_connected(self):
+    #     # Mysql by default closes client connections that are idle for
+    #     # 8 hours, but the client library does not report this fact until
+    #     # you try to perform a query and it fails.  Protect against this
+    #     # case by preemptively closing and reopening the connection
+    #     # if it has been idle for too long (7 hours by default).
+    #     if (self._db is None
+    #             or (time.time() - self._last_use_time > self.max_idle_time)):
+    #         self.reconnect()
+    #     self._last_use_time = time.time()
 
-    def _cursor(self):
-        self._ensure_connected()
-        return self._db.cursor()
+    # def _cursor(self):
+    #     self._ensure_connected()
+    #     return self._db.cursor()
+
+    # def execute(self, query, *parameters, **kwparameters):
+    #     """Executes the given query, returning the lastrowid from the query."""
+    #     cursor = self._cursor()
+    #     try:
+    #         cursor.execute(query, kwparameters or parameters)
+    #         return cursor.lastrowid
+    #     except Exception as e:
+    #         if e.args[0] == 1062:
+    #             pass
+    #         else:
+    #             traceback.print_exc()
+    #             raise e
+    #     finally:
+    #         cursor.close()
+
+    # insert = execute
+
+    def find_database(self) -> list:
+        """查询当前服务器所有数据库"""
+        return self.db.list_database_names()
+
+    def find_collection(self) -> list:
+        """查询当前数据库所有集合"""
+        return self.db_database.list_collection_names()
+
+    def drop_collection(self):
+        """删除集合"""
+        return self.db_database_collection.drop()
+
+    def get_one(self, query: dict = None) -> dict:
+        """查询一条结果"""
+        if query == None:
+            query = {}
+        return self.db_database_collection.find_one(query)
+
+    def get_all(self, query: dict = None, limit=None) -> pymongo.CursorType:
+        """返回所有数据"""
+        if query == None:
+            query = {}
+        self.cursor = self.db_database_collection.find(query)
+        if limit:
+            self.cursor = self.cursor.limit(limit)
+        return self.cursor
+
+    # def get(self, query, *parameters, **kwparameters):
+    #     """返回查询结果"""
+    #     cursor = self._cursor()
+    #     try:
+    #         cursor.execute(query, kwparameters or parameters)
+    #         return cursor.fetchone()
+    #     finally:
+    #         cursor.close()
+
+    # def get(self, query: dict = None, limit=None):
+    #     """返回查询结果的一条"""
+    #     # NOTE:未实现
+    #     if query == None:
+    #         query = {}
+    #     self.get_all()
+    #     if limit:
+    #         self.cursor = self.cursor.limit(limit)
 
     def __del__(self):
         self.close()
@@ -192,33 +272,6 @@ class Connection(object):
             return result
         finally:
             cursor.close()
-
-    def get(self, query, *parameters, **kwparameters):
-        """Returns the (singular) row returned by the given query.
-        """
-        cursor = self._cursor()
-        try:
-            cursor.execute(query, kwparameters or parameters)
-            return cursor.fetchone()
-        finally:
-            cursor.close()
-
-    def execute(self, query, *parameters, **kwparameters):
-        """Executes the given query, returning the lastrowid from the query."""
-        cursor = self._cursor()
-        try:
-            cursor.execute(query, kwparameters or parameters)
-            return cursor.lastrowid
-        except Exception as e:
-            if e.args[0] == 1062:
-                pass
-            else:
-                traceback.print_exc()
-                raise e
-        finally:
-            cursor.close()
-
-    insert = execute
 
     ## =============== high level method for table ===================
 
@@ -300,45 +353,59 @@ if __name__ == '__main__':
     # }
     # last_id = db.table_insert('test_table', item)
 
-    # 连接数据库
     connection = Connection()
-    mongo = Connection().db
-    db = mongo[connection.database]
-    print('database list: ', mongo.list_database_names())  # 查看数据库列表
+    print([i for i in connection.get_all()])
+    print("----")
+    # connection.get()
+    print(connection.get())
+    print(connection.get())
+    # print(connection.get())
+    # _a = connection.get_all()
+    # print(_a.next())
+    # print(_a.next())
 
-    # 集合管理
-    collection = db[connection.collection]
-    print('collection list: ', db.list_collection_names())  # 查看集合列表
-    # collection.drop()  # 删除集合
+    # # 连接数据库
+    # connection = Connection()
+    # mongo = connection.db
+    # db = mongo[connection.database]
+    # print('database list: ', mongo.list_database_names())  # 查看数据库列表
 
-    # 添加一条记录
-    document = {"name": "Sancho", "age": 23}
-    ret = collection.insert_one(document)
-    # 添加多条记录
-    document_list = [{"name": "Sancho", "age": 23}, {"name": "Leo", "age": 27}]
-    ret = collection.insert_many(document_list)
+    # # 集合管理
+    # collection = db[connection.collection]
+    # print('collection list: ', db.list_collection_names())  # 查看集合列表
+    # # collection.drop()  # 删除集合
 
-    # 删除一条记录
-    # query = {"name": "Leo"}
-    # ret = collection.delete_one(query)
-    # or
-    # query = {"_id": ObjectId("60d925e127bd4b7769251002")}
-    # ret = collection.delete_one(query)
-    # 删除多条记录
-    # query = {"age": {"$gt": "23"}}
-    # ret = collection.delete_many(query)
-    # or
-    # ret = collection.delete_many(query)
+    # # 添加一条记录
+    # document = {"name": "Sancho", "age": 23}
+    # ret = collection.insert_one(document)
+    # # 添加多条记录
+    # document_list = [{"name": "Sancho", "age": 23}, {"name": "Leo", "age": 27}]
+    # ret = collection.insert_many(document_list)
 
-    # 更新文档
-    query = {"name": "Sancho"}
-    collection.update_one(query, {"$set": {"age": 18}})
-    # 更新所有文档
-    # query = {"age": {"$gt": "18"}}
-    # collection.update_many(query, {"$set": {"age": 18}})
+    # # 删除一条记录
+    # # query = {"name": "Leo"}
+    # # ret = collection.delete_one(query)
+    # # or
+    # # query = {"_id": ObjectId("60d925e127bd4b7769251002")}
+    # # ret = collection.delete_one(query)
+    # # 删除多条记录
+    # # query = {"age": {"$gt": "23"}}
+    # # ret = collection.delete_many(query)
+    # # or
+    # # ret = collection.delete_many(query)
 
-    # 查询文档
-    print(collection.find_one())  # 查询一条
-    print([collection for collection in collection.find()])  # 查询所有文档
-    # print(collection.find().limit(3))  # 限制查询结果的数量，返回cursor
-    # print(collection.find({"$where": "this.age==18"}))  # 自定义条件函数，返回cursor
+    # # 更新文档
+    # query = {"name": "Sancho"}
+    # collection.update_one(query, {"$set": {"age": 18}})
+    # # 更新所有文档
+    # # query = {"age": {"$gt": "18"}}
+    # # collection.update_many(query, {"$set": {"age": 18}})
+
+    # # 查询文档
+    # print(collection.find_one())  # 查询一条
+    # print([collection for collection in collection.find()])  # 查询所有文档
+    # # print(collection.find().limit(3))  # 限制查询结果的数量，返回cursor
+    # # print(collection.find({"$where": "this.age==18"}))  # 自定义条件函数，返回cursor
+
+    # # x = [yield i for i in collection.find()]
+    # # print(collection.find())

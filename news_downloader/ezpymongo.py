@@ -209,16 +209,6 @@ class Connection(object):
     def __del__(self):
         self.close()
 
-    def query(self, query, *parameters, **kwparameters):
-        """Returns a row list for the given query and parameters."""
-        cursor = self._cursor()
-        try:
-            cursor.execute(query, kwparameters or parameters)
-            result = cursor.fetchall()
-            return result
-        finally:
-            cursor.close()
-
     def insert(self, query):
         """插入数据,传入字典为插入一条,传入列表为插入多条"""
         _type = type(query)

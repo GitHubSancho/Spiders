@@ -122,7 +122,7 @@ class Connection(object):
                                       tzinfo=self.time_zone)
         self.set_database()
         self.set_collection()
-        # FIXME:
+
         self.session = self.db.start_session()
         self.sessionID = self.session.session_id
 
@@ -150,61 +150,111 @@ class Connection(object):
             query = {}
         return self.db_database_collection.find_one(query)
 
-    def get_all(self, query: dict = None, limit=None, _fn=False) -> list:
-        """返回所有数据"""
+    # def get_all(self, query: dict = None, limit=None, _fn=False) -> list:
+    #     """返回所有数据"""
+    #     if query == None:
+    #         query = {}
+    #     self._cursor(query)
+    #     # 应该传参limit到_cursor
+    #     if limit:
+    #         self.cursor = self.cursor.limit(limit)
+    #     if _fn:
+    #         return self.cursor  # 如果是函数访问则返回游标数据
+    #     # 应该放到游标迭代托管里
+    #     return [i for i in self.cursor]
+
+    def get_all(self,
+                query: dict = None,
+                limit: int = None,
+                batch_size: int = None) -> list:
+        """
+        返回所有数据
+        - `query:查询条件,需要字典对象(默认为{})
+        - `limit:限制查询结果的最大数量
+        - `bitch_size:查询结果按值的数量,每次调用查询下一批
+        """
         if query == None:
             query = {}
-        self._cursor(query)
-        # FIXME:应该传参limit到_cursor
+        self.cursor_gen = self.db_database_collection.find(
+            query, no_cursor_timeout=True)
+        # fixme:未完全实现，需要生成器
         if limit:
-            self.cursor = self.cursor.limit(limit)
-        if _fn:
-            return self.cursor  # 如果是函数访问则返回游标数据
-        # FIXME:应该放到游标迭代托管里
-        return [i for i in self.cursor]
+            self.cursor_gen = self.cursor_gen.limit(limit)
+        if batch_size != None and type(batch_size) != int:
+            return False
+        elif type(batch_size) == int and batch_size > 0:
+            self.cursor_gen = self.cursor_gen.batch_size(batch_size)
+
+        self._cursor()
+        return self.cursor
 
     def _ensure_connected(self):
-        # FIXME:
-        """ 
-        Mysql by default closes client connections that are idle for
-        8 hours, but the client library does not report this fact until
-        you try to perform a query and it fails.  Protect against this
-        case by preemptively closing and reopening the connection
-        if it has been idle for too long (7 hours by default).
-        """
+        """定时重启服务器与监测服务器是否为打开状态"""
         if (self.db is None
                 or (time.time() - self._last_use_time > self.max_idle_time)):
             self.reconnect()
-        self._last_use_time = time.time()
-
-    def _find(self, query):
-        self.cursor = self.db_database_collection.find(query,
-                                                       no_cursor_timeout=True)
+            self._last_use_time = time.time()
         return
 
-    def _cursor(self, query):
+    # def _find(self, query):
+    #     self.cursor = self.db_database_collection.find(query,
+    #                                                    no_cursor_timeout=True)
+    #     return
+
+    # def _cursor(self, query):
+    #     """处理游标（超时问题）"""
+    #     self._ensure_connected()
+    #     try:
+    #         self._find(query)
+    #         self.refreshTimestamp = time.time()
+    #     except pymongo.errors.CursorNotFound:
+    #         self.cursor.close()
+    #         self._cursor()
+
+    def _cursor(self, batch_size=None):
         """处理游标（超时问题）"""
-        # FIXME:https://www.mongodb.com/docs/v5.0/reference/method/cursor.noCursorTimeout/
-        self._ensure_connected()
-        try:
-            self._find(query)
-            self.refreshTimestamp = time.time()
-        except pymongo.errors.CursorNotFound:
-            self.cursor.close()
-            self._cursor()
 
+        # FIXME:重构
+        def _refer_cursor(self):
+            self._ensure_connected()  # 保证服务器是打开状态
+            if time.time() - self.refreshTimestamp > 300:  # 游标打开超过五分钟
+                self.db_database.command({"refreshSessions": [self.sessionID]})
+                self.refreshTimestamp = time.time()
+
+        def _delegator(self, batch_size):
+            for i, batch in enumerate(self.cursor_gen):
+                _refer_cursor(self, -1, batch_size)
+                self.chunk.append(batch)
+                if batch_size % i == 0:
+                    # yield from
+                    del self.chunk[:]
+
+        def _controller():
+            return next(_delegator(self, batch_size))
+
+        self.refreshTimestamp = time.time()
+        if batch_size:
+            self.chunk = []
+            _controller()
+        else:
+            # self.cursor = [_refer_cursor(self, i) for i in self.cursor_gen]
+            self.cursor = []
+            for i in self.cursor_gen:
+                _refer_cursor(self)
+                self.cursor.append(i)
         return
 
-    def get(self, query: dict = None, limit=None):
-        """返回查询结果的一条"""
-        if self.cursor != None:
-            if self.query != query:  # 已有游标，重新获取新游标
-                self.query = query
-                self.get_all(self.query, _fn=True)
-            return self.cursor.next()  # 已有游标，获取下一个值
-        self.query = query
-        self.get_all(query, _fn=True)  # 没有游标，创建新游标
-        return self.cursor.next()
+    # def get(self, query: dict = None, limit=None):
+    #     """返回查询结果的一条"""
+    #     # 升级为批处理
+    #     if self.cursor != None:
+    #         if self.query != query:  # 已有游标，重新获取新游标
+    #             self.query = query
+    #             self.get_all(self.query, _fn=True)
+    #         return self.cursor.next()  # 已有游标，获取下一个值
+    #     self.query = query
+    #     self.get_all(query, _fn=True)  # 没有游标，创建新游标
+    #     return self.cursor.next()
 
     def __del__(self):
         self.close()
@@ -248,8 +298,8 @@ if __name__ == '__main__':
     # 查询数据
     print(connection.get_one())  # 查询结果（一条）
     print(connection.get_all())  # 返回所有数据
-    print(connection.get())  # 返回查询结果中的一条
-    print(connection.get())  # 继续查询下一条
+    # print(connection.get())  # 返回查询结果中的一条
+    # print(connection.get())  # 继续查询下一条
 
     # 插入数据
     # document = {"name": "Sancho", "age": 23}

@@ -150,19 +150,6 @@ class Connection(object):
             query = {}
         return self.db_database_collection.find_one(query)
 
-    # def get_all(self, query: dict = None, limit=None, _fn=False) -> list:
-    #     """返回所有数据"""
-    #     if query == None:
-    #         query = {}
-    #     self._cursor(query)
-    #     # 应该传参limit到_cursor
-    #     if limit:
-    #         self.cursor = self.cursor.limit(limit)
-    #     if _fn:
-    #         return self.cursor  # 如果是函数访问则返回游标数据
-    #     # 应该放到游标迭代托管里
-    #     return [i for i in self.cursor]
-
     def get_all(self,
                 query: dict = None,
                 limit: int = None,
@@ -175,17 +162,7 @@ class Connection(object):
         """
         if query == None:
             query = {}
-        self.cursor_gen = self.db_database_collection.find(
-            query, no_cursor_timeout=True)
-        # fixme:未完全实现，需要生成器
-        if limit:
-            self.cursor_gen = self.cursor_gen.limit(limit)
-        if batch_size != None and type(batch_size) != int:
-            return False
-        elif type(batch_size) == int and batch_size > 0:
-            self.cursor_gen = self.cursor_gen.batch_size(batch_size)
-
-        self._cursor()
+        self._cursor(query, limit, batch_size)
         return self.cursor
 
     def _ensure_connected(self):
@@ -196,65 +173,25 @@ class Connection(object):
             self._last_use_time = time.time()
         return
 
-    # def _find(self, query):
-    #     self.cursor = self.db_database_collection.find(query,
-    #                                                    no_cursor_timeout=True)
-    #     return
-
-    # def _cursor(self, query):
-    #     """处理游标（超时问题）"""
-    #     self._ensure_connected()
-    #     try:
-    #         self._find(query)
-    #         self.refreshTimestamp = time.time()
-    #     except pymongo.errors.CursorNotFound:
-    #         self.cursor.close()
-    #         self._cursor()
-
-    def _cursor(self, batch_size=None):
+    def _cursor(self, query, limit, batch_size):
         """处理游标（超时问题）"""
-
-        # FIXME:重构
         def _refer_cursor(self):
             self._ensure_connected()  # 保证服务器是打开状态
             if time.time() - self.refreshTimestamp > 300:  # 游标打开超过五分钟
                 self.db_database.command({"refreshSessions": [self.sessionID]})
                 self.refreshTimestamp = time.time()
 
-        def _delegator(self, batch_size):
-            for i, batch in enumerate(self.cursor_gen):
-                _refer_cursor(self, -1, batch_size)
-                self.chunk.append(batch)
-                if batch_size % i == 0:
-                    # yield from
-                    del self.chunk[:]
-
-        def _controller():
-            return next(_delegator(self, batch_size))
-
         self.refreshTimestamp = time.time()
-        if batch_size:
-            self.chunk = []
-            _controller()
-        else:
-            # self.cursor = [_refer_cursor(self, i) for i in self.cursor_gen]
-            self.cursor = []
-            for i in self.cursor_gen:
-                _refer_cursor(self)
-                self.cursor.append(i)
+        self.cursor = []
+        cursor_gen = self.db_database_collection.find(
+            query)  # no_cursor_timeout=True
+        if limit:
+            cursor_gen.limit(limit)
+        for i in cursor_gen:
+            _refer_cursor(self)
+            self.cursor.append(i)
+        cursor_gen.close()
         return
-
-    # def get(self, query: dict = None, limit=None):
-    #     """返回查询结果的一条"""
-    #     # 升级为批处理
-    #     if self.cursor != None:
-    #         if self.query != query:  # 已有游标，重新获取新游标
-    #             self.query = query
-    #             self.get_all(self.query, _fn=True)
-    #         return self.cursor.next()  # 已有游标，获取下一个值
-    #     self.query = query
-    #     self.get_all(query, _fn=True)  # 没有游标，创建新游标
-    #     return self.cursor.next()
 
     def __del__(self):
         self.close()

@@ -20,10 +20,28 @@ class UrlPool:
     '''
     用于管理url的网址池
     '''
-    def __init__(self, db_name, host, port):
-        self.name = db_name
-        self.path = sys.path[0] + '\\' + self.name
-        self.db = UrlDB(db_name, host, port)  # 载入网址数据库
+    def __init__(self,
+                 *args: str,
+                 host='127.0.0.1',
+                 database='demo',
+                 collection='test001',
+                 user=None,
+                 password=None,
+                 port=27017,
+                 max_idle_time=7 * 3600,
+                 timeout=10,
+                 time_zone=None):
+        self.name = database
+        self.path = sys.path[0] + '\\' + self.name  # 当前文件路径
+        self.db = UrlDB(host=host,
+                        database=database,
+                        collection=collection,
+                        user=user,
+                        password=password,
+                        port=port,
+                        max_idle_time=max_idle_time,
+                        timeout=timeout,
+                        time_zone=time_zone)  # 载入网址数据库
         self.pool = {}
         """
         self.pool = {
@@ -124,11 +142,11 @@ class UrlPool:
 
         mode = self.pool[host][url]['mode']
         if status_code == 200 and mode == 'url':
-            self.db.set_success(host, url)  # 写入到成功的网址池
+            self.db.set_success(url)  # 写入到成功的网址池
             self.pool[host].pop(url)  # 下载完成删除url
             return
         elif status_code == 404:
-            self.db.set_failure(host, url)  # （地址不存在）写入到失败的网址池
+            self.db.set_failure(url)  # （地址不存在）写入到失败的网址池
             self.pool[host].pop(url)  # 删除url
             return
 
@@ -136,7 +154,7 @@ class UrlPool:
             self.pool[host][url]['failure'] += 1  # 记录失败次数+1
             if mode == 'url' and self.pool[host][url]['failure'] > self.ini[
                     'failure_threshold']:  # 判断失败次数是否超过上限
-                self.db.set_failure(host, url)  # 从数据库中设置失败状态
+                self.db.set_failure(url)  # 从数据库中设置失败状态
                 self.pool[host].pop(url)  # 删除url
             else:  # 没有达到失败上限
                 self.pool[host][url]['status'] = 'waiting'
@@ -150,7 +168,7 @@ class UrlPool:
         if not host or '.' not in host:  # 简单判断主机地址是否合法
             print('地址错误:', url, ', len of ur:', len(url))
             return False
-        if mode == 'url' and self.db.has(host, url):  # 是否存在数据库中
+        if mode == 'url' and self.db.has(url):  # 是否存在数据库中
             return
         if self.pool.get(host, 0):  # 判断主机地址是否已被记录
             if self.pool[host].get(url, 0):
@@ -239,7 +257,7 @@ class UrlPool:
 
 
 if __name__ == "__main__":
-    urlpool = UrlPool("demo", "127.0.0.1", "27017")
+    urlpool = UrlPool()
     urlpool.set_hubs(
         ['https://sports.sina.com.cn/', 'https://news.sina.com.cn/china/'])
     urlpool.addmany([

@@ -20,28 +20,10 @@ class UrlPool:
     '''
     用于管理url的网址池
     '''
-    def __init__(self,
-                 *args: str,
-                 host='127.0.0.1',
-                 database='demo',
-                 collection='test001',
-                 user=None,
-                 password=None,
-                 port=27017,
-                 max_idle_time=7 * 3600,
-                 timeout=10,
-                 time_zone=None):
+    def __init__(self, db, database):
+        self.db = UrlDB(db)
         self.name = database
         self.path = sys.path[0] + '\\' + self.name  # 当前文件路径
-        self.db = UrlDB(host=host,
-                        database=database,
-                        collection=collection,
-                        user=user,
-                        password=password,
-                        port=port,
-                        max_idle_time=max_idle_time,
-                        timeout=timeout,
-                        time_zone=time_zone)  # 载入网址数据库
         self.pool = {}
         """
         self.pool = {
@@ -84,8 +66,13 @@ class UrlPool:
         try:
             with open(path, 'r') as f:
                 self.ini = json.load(f)
-                print("ini:")
-                print(self.ini)
+            print("load ini:%s" % self.ini)
+            self.hubs = self.ini.get("hubs", None)
+            if self.hubs == None:
+                print("访问链接前请先设置hubs链接")
+                return
+            self.set_hubs(self.hubs)
+            print("load hubs:%s" % self.hubs)
         except FileNotFoundError:
             with open(path, 'w+') as f:
                 myini = {
@@ -127,17 +114,33 @@ class UrlPool:
         except:
             pass
 
+    def _dump_ini(self, *args):  # 写入配置文件
+        # 将hub地址写入配置文件
+        path = self.path + '.json'  # 当前文件目录下
+        try:
+            with open(path, 'a+') as f:
+                hubs = [
+                    values for key in self.pool.keys for values in key
+                    if values.get("mode", None)
+                    and values not in self.ini.get("hubs", None)
+                ]
+                self.ini["hubs"] = hubs
+                json.dump(self.ini, f)
+        except:
+            pass
+
     def set_hubs(self, urls):
         """设置首页中的链接到网址池"""
         self.addmany(urls, mode="hub")
+        self._dump_ini()
 
     def set_status(self, url, status_code):
-        """访问链接并设置状态"""
+        """访问链接后设置状态"""
         host = urlparse.urlparse(url).netloc  # 解析到主机地址
         if not host or '.' not in host:  # 简单判断主机地址是否合法
             print('地址错误:', url, ', len of ur:', len(url))
             return False
-        if url not in self.pool['host']:
+        if url not in self.pool[host]:
             return False
 
         mode = self.pool[host][url]['mode']
@@ -195,7 +198,7 @@ class UrlPool:
                     "mode": mode
                 }
             }  # 加入待下载队列
-        return True
+        return self.pool[host]
 
     def addmany(self, urls, mode='url'):
         """将多个链接添加到网址池"""
@@ -224,19 +227,21 @@ class UrlPool:
                 status = self.pool[host][url].get('status', 0)
                 pendedtime = self.pool[host][url].get('pendedtime', 0)
 
-                if mode == 'hub' and time.time(
-                ) - pendedtime > self.ini["hub_refresh_span"]:  # 超过刷新时间
+                stime = time.time()
+                if mode == 'hub' and stime - pendedtime > self.ini[
+                        "hub_refresh_span"]:  # 超过刷新时间
                     if len(hubs) < hub_count:
-                        hubs.append(url)
+                        hubs.append([url, 1])
                         self.pool[host][url]['pendedtime'] = time.time(
                         )  # 更新取出时间
-                        if limit == True:  # 限制同一host下每次只有一个链接，避免给服务器造成过多压力
-                            break
+                        # if limit == True:  # 限制同一host下每次只有一个链接，避免给服务器造成过多压力
+                        #     break
 
-                if mode == 'url' and time.time(
-                ) - pendedtime > self.ini["pending_threshold"]:  #
+                stime = time.time()
+                if mode == 'url' and stime - pendedtime > self.ini[
+                        "pending_threshold"]:  #
                     if len(urls) < count - hub_count:
-                        urls.append(url)
+                        urls.append([url, 0])
                         self.pool[host][url]['pendedtime'] = time.time(
                         )  # 更新取出时间
                         if limit == True:

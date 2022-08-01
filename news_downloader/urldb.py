@@ -24,26 +24,8 @@ class UrlDB:
     #     self.db = self.client[db_name]
     #     # self.myset = self.db[set_name]
 
-    def __init__(self,
-                 *args: str,
-                 host='127.0.0.1',
-                 database='demo',
-                 collection='test001',
-                 user=None,
-                 password=None,
-                 port=27017,
-                 max_idle_time=7 * 3600,
-                 timeout=10,
-                 time_zone=None):
-        self.db = ezpymongo.Connection(host=host,
-                                       database=database,
-                                       collection=collection,
-                                       user=user,
-                                       password=password,
-                                       port=port,
-                                       max_idle_time=max_idle_time,
-                                       timeout=timeout,
-                                       time_zone=time_zone)
+    def __init__(self, db):
+        self.db = db
 
     # def set_success(self, host, url):
     #     """添加成功的数据"""
@@ -68,6 +50,7 @@ class UrlDB:
                 "url": url,
                 "status": self.status_success
             })  # 尝试写入数据
+            print("success url to db:%s" % url)
             s = True
         except:
             s = False
@@ -93,6 +76,7 @@ class UrlDB:
             url = url.encode('utf8')
         try:
             self.db.insert({"url": url, "status": self.status_failure})
+            print("failure url to db:%s" % url)
             s = True
         except:
             s = False

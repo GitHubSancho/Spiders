@@ -13,112 +13,50 @@ from bson import ObjectId
 import pymongo
 import pytz
 from urllib import parse
+import sys
+import config
 
 
 class Connection(object):
-    def __init__(self,
-                 *args: str,
-                 host='127.0.0.1',
-                 database='demo',
-                 collection='test001',
-                 user=None,
-                 password=None,
-                 port=27017,
-                 max_idle_time=7 * 3600,
-                 timeout=10,
-                 time_zone=None):
-        """
-        :Parameters:
-            - `*args`:接收数据串格式,eg:"mongodb://{}:{}/"
-            - `host`:数据库地址(默认'127.0.0.1'),
-            - `database`:数据库名(默认'test'),
-            - `collection`:数据库中的集合,
-            - `user`:用户名(可选),
-            - `password`:密码(可选),
-            - `port`:数据库端口(默认27017)
-            - `max_idle_time`:最大连接时间(7*3600分钟)
-            - `timeout`:最大响应时间(默认10秒)
-            - `time_zone`:设置时区(默认上海+8:00)
-        :TODO: 支持读取文件连接mongo
-        """
-        self.host = host
-        self.port = port
-        self.database = database
-        self.collection = collection
-        self.max_idle_time = float(max_idle_time)
-        self.timeoutMS = timeout * 1000
-        self._last_use_time = time.time()
-        self.db = None
-        self.cursor = None
-        self.time_zone = pytz.timezone('Asia/Shanghai')
-
-        if time_zone:
-            self.time_zone = time_zone
-        if user:
-            self.user = parse.quote_plus(user)
-        if password:
-            self.password = parse.quote_plus(password)
-        if type(args) == str:
-            _len = len(args.split('/'))
-            if (
-                    _len == 4 or _len == 3
-            ) and '@' not in args:  # "mongodb://host:port/" or "mongodb://host:port"
-                _ = args.split('/')[2].split(':')
-                self.host = _[0]
-                self.port = _[1]
-                self._uri = "mongodb://{}:{}/".format(self.host, self.port)
-            elif (
-                    _len == 4 or _len == 3
-            ) and '@' in args:  # 'mongodb://user:password@host:port/database'
-                _ = args.split('/')
-                _0 = _[2].split('@')
-                _1 = _0[0].split(':')
-                _2 = _0[1].split(':')
-                self.user = parse.quote_plus(_1[0])
-                self.password = parse.quote_plus(_1[1])
-                self.host = _2[0]
-                self.port = _2[1]
-                if _len == 4 and _[3] != '':
-                    self.database = _[3]
-                    self._uri = "mongodb://{}:{}@{}:{}/{}".format(
-                        self.user, self.password, self.host,
-                        self.port)  # 不连接数据库(self.database)
-                elif _len == 3 or _[
-                        3] == '':  # 'mongodb://user:password@host:port/'
-                    self._uri = "mongodb://{}:{}@{}:{}/{}".format(
-                        self.user, self.password, self.host, self.port)
+    def __init__(self, config, time_zone=None) -> None:
+        self.time_zone = time_zone
+        self.cfg = config
+        # 获取服务器信息
+        if self.cfg['user'] and self.cfg['password']:
+            self.uri = 'mongodb://%s:%d@%s:%d' % (
+                self.cfg['user'], self.cfg['password'], self.cfg['host'],
+                self.cfg['port'])
         else:
-            self._uri = "mongodb://{}:{}/".format(self.host, self.port)
-
+            self.uri = 'mongodb://%s:%d' % (self.cfg['host'], self.cfg['port'])
+        # 尝试连接服务器
         try:
             self.reconnect()
         except Exception:
             logging.error("Cannot connect to mongoDB on %s",
-                          self.host,
+                          self.cfg['host'],
                           exc_info=True)
 
-    def set_database(self, database=None):
+    def set_database(self):
         """设置或更换数据库"""
-        if type(database) == str:
-            self.database = database
-        self.db_database = self.db[self.database]
-        return
+        self.db_database = self.db[self.cfg["database"]]
+        return self.db_database
 
-    def set_collection(self, collection=None):
+    def set_collection(self):
         """设置或更换集合"""
-        if type(collection) == str:
-            self.collection = collection
-        self.db_database_collection = self.db_database[self.collection]
-        return
+        self.db_database_collection = self.db_database[self.cfg["collection"]]
+        return self.db_database_collection
 
     def reconnect(self):
-        """关闭打开的服务器并重新启动"""
-        self.close()
-        self.db = pymongo.MongoClient(self._uri,
-                                      tz_aware=True,
-                                      serverSelectionTimeoutMS=self.timeoutMS,
-                                      socketTimeoutMS=self.timeoutMS,
-                                      tzinfo=self.time_zone)
+        """重新启动数据库"""
+        self.close()  # 关闭数据库
+        if self.time_zone == None:
+            self.time_zone = pytz.timezone('Asia/Shanghai')
+        self.db = pymongo.MongoClient(
+            self.uri,
+            tz_aware=True,
+            serverSelectionTimeoutMS=self.cfg['timeoutMS'],
+            socketTimeoutMS=self.cfg['timeoutMS'],
+            tzinfo=self.time_zone)
         self.set_database()
         self.set_collection()
 
@@ -127,7 +65,7 @@ class Connection(object):
 
     def close(self):
         """关闭数据库连接"""
-        if getattr(self, "_db", None) is not None:
+        if getattr(self, "db", None) is not None:
             self.db.close()
             self.db = None
 
@@ -166,8 +104,8 @@ class Connection(object):
 
     def _ensure_connected(self):
         """定时重启服务器与监测服务器是否为打开状态"""
-        if (self.db is None
-                or (time.time() - self._last_use_time > self.max_idle_time)):
+        if (self.db is None or
+            (time.time() - self._last_use_time > self.cfg['max_idle_time'])):
             self.reconnect()
             self._last_use_time = time.time()
         return
@@ -176,7 +114,7 @@ class Connection(object):
         """处理游标（超时问题）"""
         def _refer_cursor(self):
             self._ensure_connected()  # 保证服务器是打开状态
-            if time.time() - self.refreshTimestamp > 300:  # 游标打开超过五分钟
+            if time.time() - self.refreshTimestamp > 300:  # 游标打开超过五分钟：执行重启
                 self.db_database.command({"refreshSessions": [self.sessionID]})
                 self.refreshTimestamp = time.time()
 

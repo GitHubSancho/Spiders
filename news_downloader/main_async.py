@@ -34,8 +34,6 @@ class NewsCrawlerAsync:
         self.cfg = config.Config(self.path + '.cfg')
         self.logger = downloader.init_file_logger(self.path + '.log')
 
-        print(self.cfg['host'])
-
         # 创建异步任务
         self.loop = asyncio.get_event_loop()
         self.session = aiohttp.ClientSession(loop=self.loop)

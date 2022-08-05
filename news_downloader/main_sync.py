@@ -3,7 +3,10 @@
 #FILE: main_sync.py
 #CREATE_TIME: 2022-07-26
 #AUTHOR: Sancho
-"""调度器"""
+"""
+调度器
+采集效率:41条/分钟
+"""
 
 import urllib.parse as urlparse
 import lzma
@@ -15,95 +18,46 @@ import sys
 import ezpymongo
 import time
 from urlpool import UrlPool
-
-# class NewsCrawlerSync:
-#     def __init__(self, name):
-#         self.db = Connection(config.db_host, config.db_db, config.db_user,
-#                             config.db_password)
-#         self.logger = fn.init_file_logger(name + '.log')
-#         self.urlpool = UrlPool(name)
-#         self.hub_hosts = None
-#         self.load_hubs()
+import config
 
 
 class NewsCrawlerSync:
-    def __init__(self,
-                 *args: str,
-                 host='127.0.0.1',
-                 database='demo',
-                 collection='test001',
-                 user=None,
-                 password=None,
-                 port=27017,
-                 max_idle_time=7 * 3600,
-                 timeout=10,
-                 time_zone=None):
-        # TODO:文件读取服务器配置
-        # 连接服务器
-        self.db = ezpymongo.Connection(host=host,
-                                       database=database,
-                                       collection=collection,
-                                       user=user,
-                                       password=password,
-                                       port=port,
-                                       max_idle_time=max_idle_time,
-                                       timeout=timeout,
-                                       time_zone=time_zone)
-        self.urlpool = UrlPool(self.db, database)
+    def __init__(self) -> None:
         # 读取配置
-        self.name = database
-        self.path = sys.path[0] + '\\' + self.name  # 当前文件路径
+        self.dir = sys.path[0]
+        self.name = self.dir.split('\\')[-1]
+        self.path = self.dir + '\\' + self.name
+        self.cfg = config.Config(self.path + '.cfg')
+        self.hubs = self.cfg['hubs.hubs']
+        self.hub_hosts = [urlparse.urlparse(i).netloc
+                          for i in self.hubs]  # 取出hubs的域名
         self.logger = downloader.init_file_logger(self.path + '.log')
 
-    def _load_ini(self):
-        """读取配置文件"""
-        path = self.path + '.json'  # 当前文件目录下
-        try:
-            with open(path, 'r') as f:
-                self.ini = json.load(f)
-                self.hub_hosts = [
-                    urlparse.urlparse(i).netloc
-                    for i in self.ini.get("hubs", None)
-                ]
-        except:
-            pass
+        # 连接数据库
+        self.db = ezpymongo.Connection(self.cfg)
+        self.urlpool = UrlPool(self.db, self.cfg, self.path)
 
-    # def load_hubs(self, ):
-    #     sql = 'select url from crawler_hub'
-    #     data = self.db.query(sql)
-    #     self.hub_hosts = set()
-    #     hubs = []
-    #     for d in data:
-    #         host = urlparse.urlparse(d['url']).netloc
-    #         self.hub_hosts.add(host)
-    #         hubs.append(d['url'])
-    #     self.urlpool.set_hubs(hubs, 300)
+    def close(self):
+        self.cfg.close()
 
-    # def load_hubs(self, ):
-    #     hubs = self.ini.get("hubs", None)
-    #     if hubs == None:
-    #         print("访问链接前请先设置hubs链接")
-    #         return False
-    #     print("load hubs:%s" % hubs)
+    def __del__(self):
+        self.close()
 
     def save_to_db(self, url, html):
-        # d = self.db.get_one({"url": url})
-        # if d:
-        #     if d['url'] != url:
-        #         msg = 'farmhash collision: %s <=> %s' % (url, d['url'])
-        #         self.logger.error(msg)
-        #     return True
+        # 文件编码
+        if isinstance(url, str):  # 判断数据是否是字符串
+            url = url.encode('utf8')
         if isinstance(html, str):
             html = html.encode('utf8')
-        # html_lzma = lzma.compress(html)  # 压缩文件
-        # sql = ('insert into crawler_html(urlhash, url, html_lzma) '
-        #        'values(%s, %s, %s)')
+        html_lzma = lzma.compress(html)  # 压缩文件
         good = False
+
+        # FIXME:优化写入和检索效率，采用hash算法
         try:
             if self.db.get_one({"url": url}):
-                self.db.update({"url": url}, {"$set": {"html": html}})
+                self.db.update({"url": url}, {"$set": {"html": html_lzma}})
             else:
-                self.db.insert({"url": url, "html": html})
+                self.db.insert({"url": url, "html": html_lzma})
             good = True
         except Exception as e:
             if e.args[0] == 1062:
@@ -145,14 +99,20 @@ class NewsCrawlerSync:
 
     def run(self, links: int):
         stime = time.time()
-        self._load_ini()
         while 1:
             if time.time() - stime > 300:
                 # 每运行五分钟读取配置
-                self._load_ini()
-                stime = time.time()
-                if self.ini.get("exit", 0) == 1:
+                self.cfg.close()
+                self.cfg = config.Config(self.path + '.cfg')
+                self.hubs = self.cfg['hubs.hubs']
+                self.hub_hosts = [
+                    urlparse.urlparse(i).netloc for i in self.hubs
+                ]  # 取出hubs的域名
+                stime = time.time()  # 更新时间
+                self.exit = self.cfg['exit.exit']
+                if self.exit == 1:
                     self.close()  # 退出程序
+                    break
 
             urls = self.urlpool.pop(links)
             if urls == []:

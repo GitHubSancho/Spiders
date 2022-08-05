@@ -23,10 +23,16 @@ class UrlDB:
         if isinstance(url, str):  # 判断数据是否是字符串
             url = url.encode('utf8')
         try:
-            self.db.insert({
-                "url": url,
-                "status": self.status_success
-            })  # 尝试写入数据
+            if self.has(url):  # 是否存在数据库
+                self.db.update({"url": url},
+                               {"$set": {
+                                   "status": self.status_success
+                               }})  # 更新数据
+            else:
+                self.db.insert({
+                    "url": url,
+                    "status": self.status_success
+                })  # 写入数据
             print("success url to db:%s" % url)
             s = True
         except:
@@ -38,7 +44,13 @@ class UrlDB:
         if isinstance(url, str):
             url = url.encode('utf8')
         try:
-            self.db.insert({"url": url, "status": self.status_failure})
+            if self.has(url):  # 是否存在数据库
+                self.db.update({"url": url},
+                               {"$set": {
+                                   "status": self.status_success
+                               }})
+            else:
+                self.db.insert({"url": url, "status": self.status_failure})
             print("failure url to db:%s" % url)
             s = True
         except:
@@ -50,8 +62,8 @@ class UrlDB:
         if isinstance(url, str):
             url = url.encode('utf8')
         try:
-            # attr = [i for i in self.db.get_one({"url": url})]  
-            attr = self.db.get_one({"url": url}) # 查询指定条件的数据
+            # attr = [i for i in self.db.get_one({"url": url})]
+            attr = self.db.get_one({"url": url})  # 查询指定条件的数据
             return attr
         except:
             pass

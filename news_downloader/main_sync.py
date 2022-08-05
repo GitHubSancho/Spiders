@@ -143,7 +143,7 @@ class NewsCrawlerSync:
         else:
             self.save_to_db(redirected_url, html)
 
-    def run(self, ):
+    def run(self, links: int):
         stime = time.time()
         self._load_ini()
         while 1:
@@ -154,7 +154,7 @@ class NewsCrawlerSync:
                 if self.ini.get("exit", 0) == 1:
                     self.close()  # 退出程序
 
-            urls = self.urlpool.pop(5)
+            urls = self.urlpool.pop(links)
             if urls == []:
                 # 没有链接可下载时
                 time.sleep(1)  # 等待1秒
@@ -165,4 +165,4 @@ class NewsCrawlerSync:
 
 if __name__ == '__main__':
     crawler = NewsCrawlerSync()
-    crawler.run()
+    crawler.run(5)

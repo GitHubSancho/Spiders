@@ -52,13 +52,12 @@ class Connection(object):
         self.cursor = None
         self.time_zone = pytz.timezone('Asia/Shanghai')
 
+        if time_zone:
+            self.time_zone = time_zone
         if user:
             self.user = parse.quote_plus(user)
         if password:
             self.password = parse.quote_plus(password)
-        if time_zone:
-            self.time_zone = time_zone
-
         if type(args) == str:
             _len = len(args.split('/'))
             if (

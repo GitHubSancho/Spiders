@@ -3,7 +3,10 @@
 #FILE: main_async.py
 #CREATE_TIME: 2022-08-03
 #AUTHOR: Sancho
-"""异步调度器"""
+"""
+异步调度器
+采集效率:91条/分钟
+"""
 
 import sys
 import time
@@ -18,8 +21,8 @@ import downloader
 import config  # 读取配置模块
 # import sanicdb # 此模块是Python异步操作Mysql框架
 # import farmhash
-# import uvloop
-# asyncio.set_event_loop_policy(uvloop.EventLoopPolicy()) # 不适用windows
+# import uvloop # 不适用windows
+# asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 
 class NewsCrawlerAsync:
@@ -34,36 +37,22 @@ class NewsCrawlerAsync:
         self.cfg = config.Config(self.path + '.cfg')
         self.logger = downloader.init_file_logger(self.path + '.log')
 
-        # 创建异步任务
-        self.loop = asyncio.get_event_loop()
-        self.session = aiohttp.ClientSession(loop=self.loop)
-
         # 连接数据库
         if self.cfg['user'] and self.cfg['password']:
-            self.db = AsyncIOMotorClient(
+            self.client = AsyncIOMotorClient(
                 'mongodb://%s:%d@%s:%d' %
                 (self.cfg['user'], self.cfg['password'], self.cfg['host'],
                  self.cfg['port']))
-        self.client = AsyncIOMotorClient(self.cfg['host'], self.cfg['port'])
-        self.db = self.client[self.name]
+        else:
+            self.client = AsyncIOMotorClient(self.cfg['host'],
+                                             self.cfg['port'])
+        self.db = self.client[self.cfg['database']]
         self.col = self.db[self.cfg['collection']]
-        # FIXME:传参需要变化
-        self.urlpool = UrlPool(self.db, self.name)
-
-    # async def load_hubs(self, ):
-    #     sql = 'select url from crawler_hub'
-    #     data = await self.db.query(sql)
-    #     self.hub_hosts = set()
-    #     hubs = []
-    #     for d in data:
-    #         host = urlparse.urlparse(d['url']).netloc
-    #         self.hub_hosts.add(host)
-    #         hubs.append(d['url'])
-    #     self.urlpool.set_hubs(hubs, 300)
+        self.urlpool = UrlPool(self.db, self.cfg, self.path)
 
     def load_hubs(self, ):
         self.hub_hosts = set()
-        self.hubs = self.cfg['hubs']
+        self.hubs = self.cfg['hubs.hubs']
         for hub in self.hubs:
             host = urlparse.urlparse(hub).netloc
             self.hub_hosts.add(host)
@@ -72,23 +61,26 @@ class NewsCrawlerAsync:
         return
 
     async def save_to_db(self, url, html):
-        urlhash = farmhash.hash64(url)
-        sql = 'select url from crawler_html where urlhash=%s'
-        d = await self.db.get(sql, urlhash)
-        if d:
-            if d['url'] != url:
-                msg = 'farmhash collision: %s <=> %s' % (url, d['url'])
-                self.logger.error(msg)
-            return True
+        # FIXME:使用hash算法
+        # 压缩数据
+        if isinstance(url, str):  # 判断数据是否是字符串
+            url = url.encode('utf8')
         if isinstance(html, str):
             html = html.encode('utf8')
+        sql = {'url': url}
         html_lzma = lzma.compress(html)
-        sql = ('insert into crawler_html(urlhash, url, html_lzma) '
-               'values(%s, %s, %s)')
+        sql2 = {'html': html_lzma}
+        # 存储数据
         good = False
         try:
-            await self.db.execute(sql, urlhash, url, html_lzma)
             good = True
+            d = await self.col.find_one(sql)
+            if d:  # 是否存在数据库
+                sql2 = {'$set': sql2}
+                await self.col.update_one(sql, sql2)
+                return good
+            sql.update(sql2)
+            await self.col.insert_one(sql)
         except Exception as e:
             if e.args[0] == 1062:
                 # Duplicate entry
@@ -108,7 +100,10 @@ class NewsCrawlerAsync:
         return goodlinks
 
     async def process(self, url, ishub):
-        status, html, redirected_url = await fn.fetch(self.session, url)
+        # self.session = aiohttp.ClientSession(loop=self.loop)
+        async with aiohttp.ClientSession(loop=self.loop) as self.session:
+            status, html, redirected_url = await downloader.downloader_async(
+                self.session, url)
         self.urlpool.set_status(url, status)
         if redirected_url != url:
             self.urlpool.set_status(redirected_url, status)
@@ -117,7 +112,7 @@ class NewsCrawlerAsync:
             self._workers -= 1
             return
         if ishub:
-            newlinks = fn.extract_links_re(redirected_url, html)
+            newlinks = downloader.extract_links_re(redirected_url, html)
             goodlinks = self.filter_good(newlinks)
             print("%s/%s, goodlinks/newlinks" %
                   (len(goodlinks), len(newlinks)))
@@ -126,46 +121,39 @@ class NewsCrawlerAsync:
             await self.save_to_db(redirected_url, html)
         self._workers -= 1
 
-    # async def loop_crawl(self, ):
-    #     await self.load_hubs()
-    #     last_rating_time = time.time()
-    #     counter = 0
-    #     while 1:
-    #         tasks = self.urlpool.pop(self._workers_max)
-    #         if not tasks:
-    #             print('no url to crawl, sleep')
-    #             await asyncio.sleep(3)
-    #             continue
-    #         for url, ishub in tasks.items():
-    #             self._workers += 1
-    #             counter += 1
-    #             print('crawl:', url)
-    #             asyncio.ensure_future(self.process(url, ishub))
+    def close(self):
+        del self.urlpool
+        self.cfg.close()
+        self.loop.close()
 
-    #         gap = time.time() - last_rating_time
-    #         if gap > 5:
-    #             rate = counter / gap
-    #             print('\tloop_crawl() rate:%s, counter: %s, workers: %s' %
-    #                   (round(rate, 2), counter, self._workers))
-    #             last_rating_time = time.time()
-    #             counter = 0
-    #         if self._workers > self._workers_max:
-    #             print(
-    #                 '====== got workers_max, sleep 3 sec to next worker =====')
-    #             await asyncio.sleep(3)
+    def __del__(self):
+        self.close()
 
     async def loop_crawl(self, ):
-        # await self.load_hubs()
         self.load_hubs()
         last_rating_time = time.time()
+        stime = time.time()
         counter = 0
         while 1:
+            if time.time() - stime > 300:
+                # 每运行五分钟读取配置
+                self.cfg.close()
+                self.cfg = config.Config(self.path + '.cfg')
+                self.hubs = self.cfg['hubs.hubs']
+                self.hub_hosts = [
+                    urlparse.urlparse(i).netloc for i in self.hubs
+                ]  # 取出hubs的域名
+                stime = time.time()  # 更新时间
+                self.exit = self.cfg['exit.exit']
+                if self.exit == 1:
+                    del self  # 退出程序
+                    break
             tasks = self.urlpool.pop(self._workers_max)
             if not tasks:
                 print('no url to crawl, sleep')
-                await asyncio.sleep(3)
+                await asyncio.sleep(1)
                 continue
-            for url, ishub in tasks.items():
+            for url, ishub in tasks:
                 self._workers += 1
                 counter += 1
                 print('crawl:', url)
@@ -180,11 +168,13 @@ class NewsCrawlerAsync:
                 counter = 0
             if self._workers > self._workers_max:
                 print(
-                    '====== got workers_max, sleep 3 sec to next worker =====')
-                await asyncio.sleep(3)
+                    '====== got workers_max, sleep 1 sec to next worker =====')
+                await asyncio.sleep(1)
 
     def run(self):
         try:
+            # 创建异步任务
+            self.loop = asyncio.get_event_loop()
             self.loop.run_until_complete(self.loop_crawl())
         except KeyboardInterrupt:
             print('stopped by yourself!')
@@ -194,4 +184,4 @@ class NewsCrawlerAsync:
 
 if __name__ == '__main__':
     nc = NewsCrawlerAsync()
-    # nc.run()
+    nc.run()

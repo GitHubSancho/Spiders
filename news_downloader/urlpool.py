@@ -45,7 +45,6 @@ class UrlPool:
             "failure": 0
         }]
         """
-        # self._load_ini()  # 读取配置文件
         self.set_hubs(self.hubs)
         self._load_cache()  # 读取上次未完成抓取网址的数据
 
@@ -105,7 +104,6 @@ class UrlPool:
             return False
         _status = _status[0]  # 去掉列表外壳：取到字典数据
         _index = self.pool.index(_status)  # 取出链接在pool中的索引
-
         # 根据链接状态保存到服务器
         mode = _status["mode"]
         if status_code == 200 and mode == 'url':
@@ -116,7 +114,6 @@ class UrlPool:
             self.db.set_failure(url)  # （地址不存在）写入到失败的网址池
             self.pool.pop(_index)
             return True
-
         # 访问失败时的处理
         if _status['failure'] > 0:  # 是否失败过
             self.pool[_index]['failure'] += 1  # 记录失败次数+1
@@ -215,27 +212,8 @@ class UrlPool:
 
     def size(self):
         """返回链接数"""
-        # return len(
-        #     [url for host in self.pool.keys() for url in self.pool[host]])
         return len(self.pool)
 
     # def empty(self, ):
     #     """查看待爬取的地址池是否为空"""
     #     return self.waiting_count == 0
-
-
-if __name__ == "__main__":
-    urlpool = UrlPool()
-    urlpool.set_hubs(
-        ['https://sports.sina.com.cn/', 'https://news.sina.com.cn/china/'])
-    urlpool.addmany([
-        'https://news.sina.com.cn/c/2022-07-26/doc-imizirav5396532.shtml',
-        'https://news.sina.com.cn/s/2022-07-26/doc-imizirav5429097.shtml',
-        'https://news.sina.com.cn/gov/xlxw/2022-07-26/doc-imizmscv3572469.shtml'
-    ])
-    print("main:")
-    print(urlpool.pool)
-    print("pop:")
-    print(urlpool.pop(5))
-    print("size:", urlpool.size())
-    del urlpool

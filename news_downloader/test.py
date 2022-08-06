@@ -1,2 +1,5 @@
-a = [1, 2, 34]
-print(str(a))
+car = {"brand": "Porsche"}
+a = {"color": "White"}
+car.update(a)
+
+print(car)

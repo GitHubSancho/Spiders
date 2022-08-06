@@ -5,7 +5,7 @@
 #AUTHOR: Sancho
 """
 调度器
-采集效率:41条/分钟
+采集效率:27条/分钟
 """
 
 import urllib.parse as urlparse
@@ -111,7 +111,7 @@ class NewsCrawlerSync:
                 stime = time.time()  # 更新时间
                 self.exit = self.cfg['exit.exit']
                 if self.exit == 1:
-                    self.close()  # 退出程序
+                    del self  # 退出程序
                     break
 
             urls = self.urlpool.pop(links)
@@ -125,4 +125,4 @@ class NewsCrawlerSync:
 
 if __name__ == '__main__':
     crawler = NewsCrawlerSync()
-    crawler.run(5)
+    crawler.run(30)

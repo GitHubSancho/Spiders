@@ -26,7 +26,7 @@ import config  # 读取配置模块
 
 
 class NewsCrawlerAsync:
-    def __init__(self, database="demo"):
+    def __init__(self):
         self._workers = 0
         self._workers_max = 30
 

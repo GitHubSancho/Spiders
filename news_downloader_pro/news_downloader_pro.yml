@@ -1,0 +1,15 @@
+#db
+host: '127.0.0.1'
+port: 27017
+database: 'demo'
+collection: 'test003'
+user: ''
+password: ''
+max_idle_time: 7 * 3600
+timeoutMS: 10*1000
+pending_threshold: 10
+failure_threshold: 3
+hub_refresh_span: 10
+
+#exit
+exit: True

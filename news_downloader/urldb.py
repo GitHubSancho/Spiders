@@ -47,7 +47,7 @@ class UrlDB:
             if self.has(url):  # 是否存在数据库
                 self.db.update({"url": url},
                                {"$set": {
-                                   "status": self.status_success
+                                   "status": self.status_failure
                                }})
             else:
                 self.db.insert({"url": url, "status": self.status_failure})

@@ -1,8 +1,8 @@
 #db
 host: '127.0.0.1'
 port: 27017
-database: 'demo'
-collection: 'test003'
+database: 'news_downloader_pro'
+collection: 'async001'
 user: ''
 password: ''
 max_idle_time: 7 * 3600

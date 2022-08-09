@@ -6,6 +6,7 @@
 """
 下载器
 """
+
 import re
 import urllib.parse as urlparse
 import requests
@@ -51,39 +52,11 @@ import logging
 #         status = 0
 #     return status, html, redirected_url
 
-G_BIN_POSTFIX = set([
-    'exe',
-    'doc',
-    'docx',
-    'xls',
-    'xlsx',
-    'ppt',
-    'pptx',
-    'pdf',
-    'jpg',
-    'png',
-    'bmp',
-    'jpeg',
-    'gif',
-    'zip',
-    'rar',
-    'tar',
-    'bz2',
-    '7z',
-    'gz',
-    'flv',
-    'mp4',
-    'avi',
-    'wmv',
-    'mkv',
-    'apk',
-])
-G_NEWS_POSTFIX = [
-    '.html?',
-    '.htm?',
-    '.shtml?',
-    '.shtm?',
-]
+G_BIN_POSTFIX = ('exe', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pdf',
+                 'jpg', 'png', 'bmp', 'jpeg', 'gif', 'zip', 'rar', 'tar',
+                 'bz2', '7z', 'gz', 'flv', 'mp4', 'avi', 'wmv', 'mkv', 'apk')
+
+G_NEWS_POSTFIX = ('.html?', '.htm?', '.shtml?', '.shtm?')
 
 
 def clean_url(url):
@@ -133,45 +106,36 @@ g_pattern_tag_a = re.compile(r'<a[^>]*?href=[\'"]?([^> \'"]+)[^>]*?>(.*?)</a>',
 
 
 def extract_links_re(url, html):
-    '''使用re模块从hub页面提取链接'''
-    print("extract:%s" % url)
+    """使用re模块从hub页面提取链接"""
+    print(f"extract:{url}")
     newlinks = set()
     aa = g_pattern_tag_a.findall(html)
     for a in aa:
         link = a[0].strip()
         if not link:
             continue
-        link = urlparse.urljoin(url, link)  # 将相对路径转化成绝对路径
-        link = clean_url(link)
-        if not link:
-            continue
-        newlinks.add(link)
+        link = urlparse.urljoin(url, link)
+        if link := clean_url(link):
+            newlinks.add(link)
     print("add:%d urls" % len(newlinks))
     return newlinks
 
 
-async def fetch(session, url, headers=None, timeout=9, binary=False):
+def fetch(session, url, headers=None, timeout=9, binary=False):
     """异步"""
-    # FIXME:UA池
-    _headers = {
+    _headers = headers or {
         'User-Agent':
-        ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36'
-         ),
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36'
     }
-    if headers:
-        _headers = headers
+
     try:
-        # print("donwnload:%s" % url)
-        async with session.get(url, headers=_headers, timeout=timeout) as resp:
-            status = resp.status
-            html = await resp.read()
-            if not binary:
-                encoding = cchardet.detect(html)['encoding']
-                html = html.decode(encoding, errors='ignore')
-            redirected_url = str(resp.url)
+        resp = session.get(url, headers=_headers, timeout=timeout)
+        status = resp.status_code
+        session.encoding = "utf-8"
+        html = resp.text
+        redirected_url = str(resp.url)
     except Exception as e:
-        msg = 'Failed download: {} | exception: {}, {}'.format(
-            url, str(type(e)), str(e))
+        msg = f'Failed download: {url} | exception: {str(type(e))}, {str(e)}'
         print(msg)
         html = ''
         status = 0

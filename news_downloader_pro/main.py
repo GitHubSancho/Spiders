@@ -12,7 +12,6 @@ NOTE:在抓取网页和添加链接到网址池时耗费绝大部分时间
 - 创建pandas对象和更新浪费时间
 """
 
-from statistics import mean
 import pandas
 import lzma
 import sys
@@ -24,8 +23,6 @@ from pymongo.mongo_client import MongoClient
 import urllib.parse as urlparse
 import requests
 import re
-#TODO:
-from concurrent.futures import ThreadPoolExecutor
 # REVIEW:
 import traceback
 

@@ -19,8 +19,6 @@ from pymongo.mongo_client import MongoClient
 import urllib.parse as urlparse
 import requests
 import re
-# REVIEW:
-import traceback
 
 
 class Loader:
@@ -354,10 +352,12 @@ class Crawler:
         # 初始化链接
         last_loading_time = time.time()
         self.hubs = self.loader.load_hubs()
-        self._save_to_db(self.hubs, 'hub')  # NOTE:优化
-        # 开启任务 #REVIEW:
-        # for _i in range(20):
-        while 1:
+        self._save_to_db(self.hubs, 'hub')
+        # 开启任务
+        # NOTE:500     926138.0   1852.3      0.1
+        # REVIEW:
+        for _i in range(20):
+            # while 1:
             last_loading_time, conf, hubs = self.loader.re_load_conf(
                 last_loading_time, 300)  # 刷新配置文件
             self._ischange(conf, hubs)  # 判断是否需要刷新
@@ -365,31 +365,27 @@ class Crawler:
                                    self.conf['pending_threshold'])  # 获取链接
             with requests.session() as session:
                 for task in tasks:  # 遍历待下载网址
-                    print(f'downloading:{task["url"]}')
                     # 抓取网页
+                    # NOTE:960  504462631.0 525481.9     64.1
                     status, html, redirected_url = self.downloader.fetch(
                         session, task['url'])
-                    # 更新状态 NOTE:优化
+                    # 更新状态
+                    # NOTE: 960  108409110.0 112926.2     13.8
                     self.mongo._set_status(status, self.parser._zip_html(html),
                                            redirected_url, task['mode'],
                                            task['failure'],
                                            self.conf['failure_threshold'])
                     # 解析数据
+                    # 960   27407994.0  28550.0      3.5
                     links = self.parser.process(status, html, redirected_url,
                                                 task['mode'], task['host'])
                     # 添加数据
+                    # 480  143897669.0 299786.8     18.3
                     self._save_to_db(links, 'url')
 
     def run(self):
         try:
             self.crawl()
-            # REVIEW:
-            # from line_profiler import LineProfiler
-            # lp = LineProfiler()
-            # lp_wrap = lp(self.crawl)
-            # lp_wrap()
-            # lp.print_stats()
-
         except KeyboardInterrupt:
             print('stopped by yourself!')
         self.close()
@@ -398,16 +394,3 @@ class Crawler:
 if __name__ == '__main__':
     news_crawler = Crawler()
     news_crawler.run()
-"""
-count:20
-Line #      Hits         Time  Per Hit   % Time  Line Contents
-==============================================================
-   369       500     926138.0   1852.3      0.1                  for task in tasks:  # 遍历待下载网址
-   370       480    1484612.0   3092.9      0.2                      print(f'downloading:{task["url"]}')
-   371                                                               # 抓取网页
-   372       960  504462631.0 525481.9     64.1                      status, html, redirected_url = self.downloader.fetch(                        session, task['url'])
-   375       960  108409110.0 112926.2     13.8                      self.mongo._set_status(status, self.parser._zip_html(html),
-   380       960   27407994.0  28550.0      3.5                      links = self.parser.process(status, html, redirected_url,task['mode'], task['host'])
-   # 添加数据
-   383       480  143897669.0 299786.8     18.3                      self._save_to_db(links, 'url')
-"""

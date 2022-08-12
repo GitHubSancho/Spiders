@@ -2,7 +2,7 @@
 host: '127.0.0.1'
 port: 27017
 database: 'news_downloader_pro'
-collection: 'sync007'
+collection: 'sync010'
 user: ''
 password: ''
 max_idle_time: 7 * 3600

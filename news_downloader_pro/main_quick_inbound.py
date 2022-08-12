@@ -9,9 +9,6 @@
 效率:346条/分钟
 """
 
-from datetime import datetime
-from typing import Mapping
-import pandas
 import lzma
 import sys
 import time

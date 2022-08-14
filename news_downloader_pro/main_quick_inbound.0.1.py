@@ -6,7 +6,7 @@
 """
 新闻爬虫
 抛弃网址池，直接使用数据库查询和存储
-效率:346条/分钟
+效率:30页/分钟
 """
 
 import lzma
@@ -342,9 +342,11 @@ class Crawler:
             sample['mode'] = mode
             sample['url'] = url
             sample['host'] = self.parser._get_hosts(url)
+            # NOTE: 9928   97618443.0   9832.6     96.1
             if not self.mongo.has({'url': url}):
                 documents.append(sample)
         self.mongo.insert_many(documents)
+
         print(f'add links {len(documents)}')
         return True
 
@@ -356,13 +358,15 @@ class Crawler:
         # 开启任务
         # NOTE:500     926138.0   1852.3      0.1
         # REVIEW:
-        for _i in range(20):
-            # while 1:
+        # for _i in range(20):
+        while 1:
             last_loading_time, conf, hubs = self.loader.re_load_conf(
                 last_loading_time, 300)  # 刷新配置文件
             self._ischange(conf, hubs)  # 判断是否需要刷新
             tasks = self.mongo.get(self.MAX_WORKERS_CONCURRENT,
                                    self.conf['pending_threshold'])  # 获取链接
+            # REVIEW:
+            links_list = []
             with requests.session() as session:
                 for task in tasks:  # 遍历待下载网址
                     # 抓取网页
@@ -379,18 +383,30 @@ class Crawler:
                     # 960   27407994.0  28550.0      3.5
                     links = self.parser.process(status, html, redirected_url,
                                                 task['mode'], task['host'])
+                    if links:
+                        links_list.extend(links)
+
                     # 添加数据
-                    # 480  143897669.0 299786.8     18.3
-                    self._save_to_db(links, 'url')
+                    # NOTE: 20  112281095.0 5614054.8     17.6
+                # REVIEW:
+
+                # lp_wrap = lp(self._save_to_db)
+                # lp_wrap(links_list, 'url')
+
+                self._save_to_db(links_list, 'url')
 
     def run(self):
         try:
             self.crawl()
+            # REVIEW:
+            # lp.print_stats()
         except KeyboardInterrupt:
             print('stopped by yourself!')
         self.close()
 
 
 if __name__ == '__main__':
+    from line_profiler import LineProfiler
+    lp = LineProfiler()
     news_crawler = Crawler()
     news_crawler.run()

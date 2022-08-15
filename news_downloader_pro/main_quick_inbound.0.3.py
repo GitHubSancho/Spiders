@@ -9,6 +9,8 @@
 效率:40页/分钟
 """
 
+from memory_profiler import profile
+
 import lzma
 import sys
 import time
@@ -373,23 +375,31 @@ class Crawler:
                                    self.conf['failure_threshold'])
             # 遍历待下载链接
             with requests.session() as session:
+                # NOTE: 67.6 MiB  -1152.6 MiB         484
                 for task in tasks:
                     # 抓取网页
-                    # NOTE: 928  221327937.0 238499.9     49.0
                     # NOTE: 928  392154798.0 422580.6     76.5
+                    # NOTE: 67.6 MiB  -2360.1 MiB         928
                     status, html, redirected_url = self.downloader.fetch(
-                        session, task['url'])
+                        # NOTE: 67.6 MiB  -1210.8 MiB         464
+                        session,
+                        task['url'])
 
                     # 压缩数据
-                    # NOTE: 464  122142656.0 263238.5     27.0
                     # NOTE: 464   83654740.0 180290.4     16.3
+                    # NOTE: 67.6 MiB  -1152.2 MiB         464
                     html_zip = self.parser._zip_html(html, task['mode'])
 
                     # 解析数据
-                    # NOTE: 928   29979802.0  32305.8      6.6
                     # NOTE: 928    9652641.0  10401.6      1.9
-                    links = self.parser.process(status, html, redirected_url,
-                                                task['mode'], task['host'])
+                    # NOTE: 67.6 MiB  -2306.4 MiB         928
+                    links = self.parser.process(
+                        status,
+                        html,
+                        redirected_url,
+                        # NOET: 67.6 MiB  -1162.5 MiB         464
+                        task['mode'],
+                        task['host'])
 
                     # 整理数据
                     documents.update(
@@ -397,7 +407,6 @@ class Crawler:
                                                task['mode'], status, html_zip,
                                                True))
 
-                    # NOTE: 138    3242522.0  23496.5      0.7
                     # NOTE: 42     970872.0  23116.0      0.2
                     if links:
                         documents.update(
@@ -408,7 +417,6 @@ class Crawler:
                             ] for link in links], True))
 
                 # 更新状态
-                # NOTE: 40   74471895.0 1861797.4     16.5
                 # NOTE: 40   25585674.0 639641.8      5.0
                 [
                     self.mongo.update({'url': url}, document, True)
@@ -418,6 +426,7 @@ class Crawler:
     def run(self):
         try:
             # REVIEW:
+
             self.crawl()
 
             # lp_wrap = lp(self.crawl)
@@ -431,7 +440,7 @@ class Crawler:
 if __name__ == '__main__':
     news_crawler = Crawler()
     # REVIEW:
-    from line_profiler import LineProfiler
-    lp = LineProfiler()
+    # from line_profiler import LineProfiler
+    # lp = LineProfiler()
 
     news_crawler.run()

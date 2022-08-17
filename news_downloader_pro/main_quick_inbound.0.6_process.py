@@ -6,14 +6,13 @@
 """
 新闻爬虫
 多进程+多线程下载网页，并存储到数据库
-效率:1300页/分钟
+效率:2470页/分钟
 修复：解析时只选择当前hub的子域名下的链接（将解析全部hub子域名下的链接）
 """
 
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, process
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import lzma
-from multiprocessing import Queue, pool
-import multiprocessing
+from multiprocessing import Lock, Queue
 import re
 import sys
 import time
@@ -75,13 +74,6 @@ class Mongo:
                                unique=True)  # 创建索引
         return True
 
-    def _close(self):
-        # self.client.close()
-        pass
-
-    def __del__(self):
-        self._close()
-
     def get_url_list(self):
         urls = self.coll.find({}, {'_id': 0, 'url': 1})
         url_list = list(urls)
@@ -96,12 +88,18 @@ class Mongo:
     def update(self, query):
         self.coll.update_one(query[0], query[1], upsert=True)
 
+    def update_documents(self, documents, workers):
+        with ThreadPoolExecutor(workers) as thread_pool2:
+            thread_pool2.map(self.update, documents)
+        return True
+
 
 class Downloader:
     UA = {
         'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36'
     }
+    MAX_WORKERS_THREAD = 12
 
     def __init__(self) -> None:
         self.session = requests.session()
@@ -131,6 +129,11 @@ class Downloader:
             status = 0
             redirected_url = url
         return status, html, url, redirected_url
+
+    def crawler(self, task):
+        with ThreadPoolExecutor(self.MAX_WORKERS_THREAD) as thread_pool1:
+            features = thread_pool1.map(self.fetch, task)
+        return features
 
 
 class Parser:
@@ -229,9 +232,75 @@ class Parser:
             html = html.encode('utf8')
         return lzma.compress(html)
 
+    def _parse_html(self, status_code, html, url):
+        links = []
+        links.extend(
+            self.extract_links(status_code, html, url, 'hub',
+                               self.get_hosts(url)))
+
+        document = [[{'url': url}, {'$set': {'pendedtime': time.time()}}]]
+        return links, document
+
+    def _zip(self, html, url):
+        status = 'success'
+        # TODO: 访问失败处理
+        # failures = self.failure.get(url, 0)
+        # if failures >= 3:
+        #     status = 'failure'
+        html_zip = self.zip_html(html, 'url')
+        return [[
+            {
+                'url': url
+            },
+            {
+                '$set': {
+                    'status': status,
+                    'pendedtime': time.time(),
+                    # 'failure': failures,
+                    'failure': 0,
+                    'html': html_zip
+                }
+            }
+        ]]
+
+    def process(self, features, hubs):
+        documents = []
+        links = []
+        for status_code, html, url, _ in features:
+            if status_code != 200:
+                # TODO:访问失败处理
+                # self.count_failure(url)
+                continue
+            # 解析数据
+            if url in hubs:
+                link, document = self._parse_html(status_code, html, url)
+                links.extend(link)
+                documents.extend(document)
+                continue
+            # 压缩数据
+            documents.extend(self._zip(html, url))
+        return documents, links
+
+    def append_links(self, links, url_pool):
+        links_hosts = self.get_hosts(links)
+        urls = zip(links, links_hosts)
+        return [[{
+            'url': url
+        }, {
+            '$set': {
+                'url': url,
+                'host': host,
+                'mode': 'url',
+                'status': 'waiting',
+                'pendedtime': 2,
+                'failure': 0,
+                'html': ''
+            }
+        }] for url, host in urls if url not in url_pool]
+
 
 class Crawl:
-    MAX_WORKERS_PROCESS, MAX_WORKERS_THREAD, MAX_WORKERS_CONCURRENT = 6, 12, 24
+    MAX_WORKERS_PROCESS, MAX_WORKERS_CONCURRENT = 6, 24
 
     def __init__(self) -> None:
         # 读取配置信息
@@ -244,6 +313,10 @@ class Crawl:
         # 其它模块
         self.parser = Parser()
         self.downloader = Downloader()
+        # 时间记录
+        self.last_loading_time = time.time()
+        # 记录失败url和次数
+        self.failure = {}
 
     def _close(self):
         self.mongo._close()
@@ -307,118 +380,58 @@ class Crawl:
             self.failure['url'] = 1
         return True
 
-    def crawler(self, tasks):
-        with ThreadPoolExecutor(self.MAX_WORKERS_THREAD) as self.thread_pool1:
-            features = self.thread_pool1.map(self.downloader.fetch, tasks)
-        return features
+    # def run(self):
+    #     try:
+    #         self.crawl()
+    #     except KeyboardInterrupt:
+    #         print('stopped by yourself!')
+    #     self._close()
 
-    def _parser(self, status_code, html, url):
-        links = []
-        links.extend(
-            self.parser.extract_links(status_code, html, url, 'hub',
-                                      self.hub_hosts))
 
-        document = [[{'url': url}, {'$set': {'pendedtime': time.time()}}]]
-        return links, document
+def crawl_loop(conf, task, hubs, url_pool):
+    # 下载网页
+    features = Downloader().crawler(task)
+    # 解析和压缩网页
+    documents, links = Parser().process(features, hubs)
+    # 添加新链接
+    if links:
+        documents.extend(Parser().append_links(links, url_pool))
+    # 上传数据
+    mongo = Mongo(conf)
+    mongo.update_documents(documents, 12)
+    print(f"更新链接/已有链接：{len(documents)}/{len(url_pool)}")
 
-    def _zip(self, html, url):
-        status = 'success'
-        failures = self.failure.get(url, 0)
-        if failures >= 3:
-            status = 'failure'
-        html_zip = self.parser.zip_html(html, 'url')
-        return [[{
-            'url': url
-        }, {
-            '$set': {
-                'status': status,
-                'pendedtime': time.time(),
-                'failure': failures,
-                'html': html_zip
-            }
-        }]]
 
-    def _process(self, features):
-        documents = []
-        links = []
-        for status_code, html, url, _ in features:
-            if status_code != 200:
-                self.count_failure(url)
-            # 解析数据
-            if url in self.hubs:
-                link, document = self._parser(status_code, html, url)
-                links.extend(link)
-                documents.extend(document)
-                continue
-            # 压缩数据
-            documents.extend(self._zip(html, url))
-        return documents, links
+def crawl():
+    crawler = Crawl()
+    # 将hubs存入数据库
+    crawler.hub_hosts = crawler.parser.get_hosts(crawler.hubs)
+    crawler.insert_urls_defult(crawler.hubs, crawler.hub_hosts, 'hub')
+    while 1:
+        # for _ in range(20):
+        print(
+            f"---------- {time.time() - crawler.last_loading_time} ----------")
+        # 到时间重新载入配置文件
+        crawler.last_loading_time = crawler._refresh_files(
+            crawler.last_loading_time, 2 * 60)
+        # 获取待下载链接
+        crawler.url_pool = crawler.mongo.get_url_list()
+        tasks = crawler.get_waiting_urls_list(crawler.MAX_WORKERS_CONCURRENT *
+                                              crawler.MAX_WORKERS_PROCESS)
+        tasks = [
+            tasks[i:i + crawler.MAX_WORKERS_CONCURRENT]
+            for i in range(0, len(tasks), crawler.MAX_WORKERS_CONCURRENT)
+        ]
 
-    def _append_links(self, links):
-        links_hosts = self.parser.get_hosts(links)
-        urls = zip(links, links_hosts)
-        return [[{
-            'url': url
-        }, {
-            '$set': {
-                'url': url,
-                'host': host,
-                'mode': 'url',
-                'status': 'waiting',
-                'pendedtime': 2,
-                'failure': 0,
-                'html': ''
-            }
-        }] for url, host in urls if url not in self.url_pool]
+        # crawl_loop(url_pile)
 
-    def _update(self, documents):
-        with ThreadPoolExecutor(self.MAX_WORKERS_THREAD) as self.thread_pool2:
-            self.thread_pool2.map(self.mongo.update, documents)
-        return True
-
-    def crawl_loop(self, tasks):
-        # 下载网页
-        features = self.crawler(tasks)
-        # 解析和压缩网页
-        documents, links = self._process(features)
-        # 添加新链接
-        if links:
-            documents.extend(self._append_links(links))
-        # 上传数据库
-        self._update(documents)
-
-    def crawl(self):
-        # 将hubs存入数据库
-        self.hub_hosts = self.parser.get_hosts(self.hubs)
-        self.insert_urls_defult(self.hubs, self.hub_hosts, 'hub')
-        # 时间记录
-        last_loading_time = time.time()
-        # 记录失败url和次数
-        self.failure = {}
-
-        # 循环进行下载、解析、入库
-        while 1:
-            print(f"---------- {time.time() - last_loading_time} ----------")
-            # 到时间重新载入配置文件
-            last_loading_time = self._refresh_files(last_loading_time, 2 * 60)
-            # 获取待下载链接
-            self.url_pool = self.mongo.get_url_list()
-            url_pile = self.get_waiting_urls_list(self.MAX_WORKERS_CONCURRENT)
-            # url_list = [
-            #     url_pile[i:i + self.MAX_WORKERS_CONCURRENT]
-            #     for i in range(0, len(url_pile), self.MAX_WORKERS_CONCURRENT)
-            # ]
-
-            self.crawl_loop(url_pile)
-
-    def run(self):
-        try:
-            self.crawl()
-        except KeyboardInterrupt:
-            print('stopped by yourself!')
-        self._close()
+        with ProcessPoolExecutor(crawler.MAX_WORKERS_PROCESS) as process_pool:
+            [
+                process_pool.submit(crawl_loop, crawler.conf, task,
+                                    crawler.hubs, crawler.url_pool)
+                for task in tasks
+            ]
 
 
 if __name__ == "__main__":
-    crawler = Crawl()
-    crawler.run()
+    crawl()

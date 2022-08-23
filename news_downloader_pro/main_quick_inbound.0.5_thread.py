@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #-*- coding: utf-8 -*-
-#FILE: main_thread.py
+#FILE: main_quick_inbound.0.5_thread.py
 #CREATE_TIME: 2022-08-15
 #AUTHOR: Sancho
 """
@@ -39,6 +39,7 @@ class Loader:
     def _load_hubs(self):
         with open(f'{self.path}_hubs.yml', 'r', encoding='utf-8') as f:
             self.hubs = yaml.load(f, Loader=yaml.CLoader)
+            self.hubs = list(set(self.hubs))
         return self.hubs
 
     def re_load_conf(self, last_loading_time, refresh_time=300):
@@ -312,10 +313,9 @@ class Crawl:
 
     def _parser(self, status_code, html, url):
         links = []
-        links.extend(
-            self.parser.extract_links(status_code, html, url, 'hub',
-                                      self.hub_hosts))
-
+        if link := self.parser.extract_links(status_code, html, url, 'hub',
+                                             self.hub_hosts):
+            links.extend(link)
         document = [[{'url': url}, {'$set': {'pendedtime': time.time()}}]]
         return links, document
 

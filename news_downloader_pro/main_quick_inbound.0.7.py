@@ -1,17 +1,16 @@
 #!/usr/bin/env python
 #-*- coding: utf-8 -*-
-#FILE: main_quick_inbound.0.6_process.py
+#FILE: main_quick_inbound.0.7.py
 #CREATE_TIME: 2022-08-17
 #AUTHOR: Sancho
 """
 新闻爬虫
-多进程+多线程下载网页，并存储到数据库
-效率:2470页/分钟
+重构：多进程、多线程下载网页，并存储到数据库
 """
 
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import lzma
-from multiprocessing import Manager, Lock, Queue
+import queue
 import re
 import sys
 import time
@@ -36,6 +35,8 @@ class Loader:
     def load_hubs(self):
         with open(f'{self.path}_hubs.yml', 'r', encoding='utf-8') as f:
             hubs = yaml.load(f, Loader=yaml.CLoader)
+            # REVIEW:只读取前24个hub链接
+            hubs = list(set(hubs))[:24]
         return hubs
 
     def reload_files(self):
@@ -60,8 +61,7 @@ class Mongo:
     def __len__(self, _filter=None):
         if not _filter:
             _filter = {}
-        data = list(self.get(_filter, {'url': 1, '_id': 0}))
-        return len([url['url'] for url in data])
+        return self.coll.count_documents(_filter)
 
     @staticmethod
     def _build_uri(host, port, user=None, password=None):
@@ -111,30 +111,46 @@ class Mongo:
             }
         }]]
 
+    @staticmethod
+    def _build_update_documents(mode,
+                                urls,
+                                status=None,
+                                failure=None,
+                                html_zip=None):
+        documents = []
+        [
+            documents.extend(
+                Mongo._build_update_document(mode, url, status, failure,
+                                             html_zip)) for url in urls
+        ]
+        return documents
+
     def _client(self):
         self.client = MongoClient(self._build_uri(self.host, self.port,
                                                   self.user, self.password),
                                   maxPoolSize=None)
+        self._connect_db()
+        return True
+
+    def _connect_db(self):
         self.db = self.client[self.database]
         self.coll = self.db[self.collection]
-        self.coll.create_index([('url', pymongo.ASCENDING)],
-                               unique=True)  # 创建索引
-        return True
+        self.coll.create_index([('url', pymongo.ASCENDING)], unique=True)
+        # 创建索引
+        return
 
     def _close(self):
         if self.client:
             self.client.close()
 
-    def get(self, filter, projection=None, limit=0):
+    def get(self, myfilter, projection=None, limit=0):
         if projection:
-            return self.coll.find(filter, projection, limit=limit)
-        return self.coll.find(filter, limit=limit)
+            return self.coll.find(myfilter, projection, limit=limit)
+        return self.coll.find(myfilter, limit=limit)
 
-    def get_all_list(self, projection=None):
-        if projection is None:
-            projection = {'_id': 0, 'url': 1}
-        url_list = list(self.get({}, projection))
-        return [url['url'] for url in url_list]
+    def get_all_list(self):
+        data = list(self.get({}, {'url': 1, "_id": 0}))
+        return [url['url'] for url in data]
 
     def get_waiting_urls(self, pending_threshold, failure_threshold, limit):
         refresh_time = time.time() - pending_threshold
@@ -152,38 +168,21 @@ class Mongo:
                 },
                 limit=limit))
 
-    def get_url_batch(self, query: dict, batch):
-        return self.coll.find(query, {'html': 0}, limit=batch)
-
-    def update(self, filter):
+    def update_one(self, document):
         try:
-            self.coll.update_one(filter[0], filter[1], upsert=True)
+            self.coll.update_one(document[0], document[1], upsert=True)
         except Exception as e:
             print(e)
 
     def update_many(self, documents):
-        [self.update(document) for document in documents]
+        [self.update_one(document) for document in documents]
 
-    def update_documents(self, documents, workers):
+    def update_thread(self, documents, workers):
         with ThreadPoolExecutor(workers) as thread_pool2:
-            thread_pool2.map(self.update, documents)
+            thread_pool2.map(self.update_one, documents)
         return True
 
-    def get_task(self, pending_threshold, failure_threshold,
-                 concuttent_workers, _):
-        return self.get_waiting_urls(pending_threshold, failure_threshold,
-                                     concuttent_workers)
-
-    def get_tasks(self, pending_threshold, failure_threshold,
-                  concuttent_workers, process_workers):
-        tasks = self.get_waiting_urls(pending_threshold, failure_threshold,
-                                      concuttent_workers * process_workers)
-        return [
-            tasks[i:i + concuttent_workers]
-            for i in range(0, len(tasks), concuttent_workers)
-        ]
-
-    def get_downloaded_num(self):
+    def len_downloaded_documents(self):
         return self.__len__({'html': {"$ne": ""}})
 
 
@@ -196,12 +195,11 @@ class Downloader:
     def __init__(self) -> None:
         pass
 
-    @classmethod
-    def fetch(cls, session, url, headers=None, timeout=9):
+    def fetch(self, session, url, headers=None, timeout=9):
         # TODO:UA池
         if isinstance(url, dict):
             url = url['url']
-        _headers = headers or Downloader.UA
+        _headers = headers or self.UA
         try:
             resp = session.get(url, headers=_headers, timeout=timeout)
             status = resp.status_code
@@ -216,14 +214,12 @@ class Downloader:
             redirected_url = url
         return status, html, url, redirected_url
 
-    @staticmethod
-    def crawler(session, task, workers):
-        with ThreadPoolExecutor(workers) as thread_pool1:
-            features = [
-                thread_pool1.submit(Downloader().fetch, session, url).result()
+    def crawler(self, session, task, thread_workers):
+        with ThreadPoolExecutor(thread_workers) as thread_pool1:
+            return [
+                thread_pool1.submit(self.fetch, session, url).result()
                 for url in task
             ]
-        return features
 
 
 class Parser:
@@ -237,40 +233,6 @@ class Parser:
 
     def __init__(self) -> None:
         pass
-
-    @staticmethod
-    def get_hosts(urls):
-        if isinstance(urls, str):
-            return urlparse.urlparse(urls).netloc
-        return [urlparse.urlparse(url).netloc for url in urls]
-
-    @staticmethod
-    def get_defult_documents(mode, links):
-        links_hosts = Parser.get_hosts(links)
-        documents = zip(links, links_hosts)
-        return Mongo._build_defult_documents(mode, documents)
-
-    @staticmethod
-    def process(features, hubs):
-        parser = Parser()
-        documents = []
-        links = []
-        for status_code, html, url, _ in features:
-            if status_code != 200:
-                # TODO:访问失败处理
-                # self.count_failure(url)
-                continue
-            # 解析数据
-            if url in hubs:
-                hubs_hosts = set(Parser.get_hosts(hubs))
-                link, document = parser._parse_html(status_code, html, url,
-                                                    hubs_hosts)
-                links.extend(link)
-                documents.extend(document)
-                continue
-            # 压缩数据
-            documents.extend(parser._get_url_document(html, url))
-        return documents, links
 
     def _clean_url(self, url):
         # 1. 是否为合法的http url
@@ -334,13 +296,16 @@ class Parser:
         # print("add:%d urls" % len(newlinks))
         return newlinks
 
-    def _parse_html(self, status_code, html, url, hosts):
-        links = []
-        links.extend(self.extract_links(status_code, html, url, 'hub', hosts))
-        document = Mongo._build_update_document('hub', url)
-        return links, document
+    def _get_url_document(self, html, url):
+        status = 'success'
+        # TODO: 访问失败处理
+        # failures = self.failure.get(url, 0)
+        # if failures >= 3:
+        #     status = 'failure'
+        html_zip = self.zip_html(html, 'url')
+        return Mongo._build_update_document('url', url, status, 0, html_zip)
 
-    def _zip_html(self, html, mode):
+    def zip_html(self, html, mode):
         if not html:
             return ''
         if mode == 'hub':
@@ -348,15 +313,6 @@ class Parser:
         if isinstance(html, str):
             html = html.encode('utf8')
         return lzma.compress(html)
-
-    def _get_url_document(self, html, url):
-        status = 'success'
-        # TODO: 访问失败处理
-        # failures = self.failure.get(url, 0)
-        # if failures >= 3:
-        #     status = 'failure'
-        html_zip = self._zip_html(html, 'url')
-        return Mongo._build_update_document('url', url, status, 0, html_zip)
 
     def extract_links(self, status, html, redirected_url, mode, hosts):
         # 提取hub网页中的链接
@@ -366,22 +322,44 @@ class Parser:
             newlinks = self._extract_links_re(redirected_url, html)
             return self._filter_good(newlinks, hosts)
 
+    def parse_html(self, status_code, html, url, hosts):
+        links = []
+        links.extend(self.extract_links(status_code, html, url, 'hub', hosts))
+        document = Mongo._build_update_document('hub', url)
+        return links, document
+
 
 class Engine:
     def __init__(self) -> None:
-        # 读取配置信息
+        # 读取配置文件
         self.loader = Loader()
-        self.conf = self.loader.load_conf()
-        self.hubs = self.loader.load_hubs()
-        # 链接数据库
+        self.conf, self.hubs = self.loader.reload_files()
+        # 连接数据库
         self.mongo = Mongo(self.conf)
+        # 上传初始链接
+        self.hubs_hosts, documents = self.pack_documents('hub', self.hubs)
+        self.mongo.update_many(documents)
         # 其它模块
-        self.parser = Parser()
         self.downloader = Downloader()
-        # 时间记录
-        self.last_loading_time = time.time()
-        # 记录失败url和次数
-        self.failure = {}
+        self.parser = Parser()
+
+    def __del__(self):
+        self._close()
+
+    @staticmethod
+    def get_hosts(urls):
+        if isinstance(urls, str):
+            return urlparse.urlparse(urls).netloc
+        return [urlparse.urlparse(url).netloc for url in urls]
+
+    @staticmethod
+    def pack_documents(mode, urls):
+        hosts = Engine.get_hosts(urls)
+        documents = Mongo._build_defult_documents(mode, zip(urls, hosts))
+        return hosts, documents
+
+    def _close(self):
+        sys.exit("done!")
 
     def refresh_files(self, refreshtime=300):
         if time.time() - self.last_loading_time < refreshtime:
@@ -393,78 +371,116 @@ class Engine:
         if self.conf != conf_new:
             self.conf = conf_new
         if self.conf['exit'] is True:  #退出检测
-            sys.exit()
+            self._close()
         if difference := set(hubs_new).difference(set(self.hubs)):  # 添加到数据库
-            documents = Parser.get_defult_documents('hub', difference)
-            [self.mongo.update(document) for document in documents]
+            hubs_hosts, documents = self.pack_documents('hub', difference)
+            self.hubs_hosts.extend(hubs_hosts)
+            self.mongo.update_many(documents)
             self.hubs = hubs_new
+
         return
 
+    def process(self, features):
+        documents = []
+        links = []
+        for status_code, html, url, _ in features:
+            if status_code != 200:
+                # TODO:访问失败处理
+                # self.count_failure(url)
+                continue
+            # 解析数据
+            if url in self.hubs:
+                link, document = self.parser.parse_html(
+                    status_code, html, url, self.hubs_hosts)
+                links.extend(link)
+                documents.extend(document)
+                continue
+            # 压缩数据
+            documents.extend(self.parser._get_url_document(html, url))
+        return documents, links
 
-def crawl_loop(task, conf, hubs, url_pool, queue, lock):
-    # 下载网页
-    with requests.session() as session:
-        features = Downloader.crawler(session, task, MAX_WORKERS_THREAD)
-    # 解析和压缩网页
-    documents, links = Parser.process(features, hubs)
-    # 添加新链接
-    if links:
-        links = set(links).difference(url_pool)
-        documents.extend(Parser.get_defult_documents('url', links))
-    # 上传数据
-    mongo = Mongo(conf)
-    mongo.update_documents(documents, MAX_WORKERS_THREAD)
-    print(f"已有页面：{mongo.get_downloaded_num()}")
+    def start_thread(self):
+        # 多线程函数
+        self.last_loading_time = time.time()
+        with requests.session() as session:
+            while 1:
+                # 计时重读配置文件
+                self.refresh_files(60 * 2)
+                # 获取待下载链接
+                self.url_pool = self.mongo.get_all_list()
+                task = self.mongo.get_waiting_urls(
+                    self.conf['pending_threshold'],
+                    self.conf['failure_threshold'], MAX_WORKERS_CONCURRENT)
+                # 执行任务
+                # 下载网页
+
+                features = self.downloader.crawler(session, task,
+                                                   MAX_WORKERS_THREAD)
+                # 解析和添加网页
+                documents, links = self.process(features)
+                # 添加新链接
+                if links:
+                    links = set(links).difference(self.url_pool)
+                    _, document = self.pack_documents('url', links)
+                    documents.extend(document)
+                # 更新数据库
+                self.mongo.update_thread(documents, MAX_WORKERS_THREAD)
+                print(
+                    f"已有页面：{self.mongo.len_downloaded_documents()}/已有链接：{len(self.mongo)}"
+                )
+
+    def start_process(self):
+        # 多进程函数（调用时消耗过大，效率不高）
+        self.last_loading_time = time.time()
+        # while 1:
+        for _ in range(10):
+            # 计时重读配置文件
+            self.refresh_files(60 * 2)
+            # 获取待下载链接
+            self.url_pool = self.mongo.get_all_list()
+            task = self.mongo.get_waiting_urls(self.conf['pending_threshold'],
+                                               self.conf['failure_threshold'],
+                                               MAX_WORKERS_CONCURRENT)
+            # 执行任务
+            # 下载网页
+            features = self.downloader.crawler(task, MAX_WORKERS_THREAD)
+            # 解析和添加网页
+            with ProcessPoolExecutor(MAX_WORKERS_PROCESS) as process_pool:
+                result = [
+                    process_pool.submit(_process, feature, self.hubs,
+                                        self.hubs_hosts).result()
+                    for feature in features
+                ]
+                documents, links = [], []
+                for document, link in result:
+                    documents.extend(document)
+                    links.extend(link)
+            # 添加新链接
+            if links:
+                links = set(links).difference(self.url_pool)
+                _, document = self.pack_documents('url', links)
+                documents.extend(document)
+            # 更新数据库
+            self.mongo.update_thread(documents, MAX_WORKERS_THREAD)
+            print(
+                f"已有页面：{self.mongo.len_downloaded_documents()}/已有链接：{len(self.mongo)}"
+            )
 
 
-def crawl():
-    # 读取配置
-    engine = Engine()
-    conf = engine.loader.load_conf()
-    hubs = engine.loader.load_hubs()
-    # 将hubs存入数据库
-    documents = engine.parser.get_defult_documents('hub', hubs)
-    engine.mongo.update_many(documents)
-    process_manager = Manager()
-    queue = process_manager.Queue(10)
-    lock = process_manager.Lock()
-    # warp = lp(crawl_loop)
-    while 1:
-        # for _ in range(10):
-        # 到时间重新载入配置文件
-        engine.refresh_files(60 * 2)
-        conf = engine.conf
-        hubs = engine.hubs
-        # 获取待下载链接（多进程）
-        engine.url_pool = engine.mongo.get_all_list()
-        tasks = engine.mongo.get_tasks(conf['pending_threshold'],
-                                       conf['failure_threshold'],
-                                       MAX_WORKERS_CONCURRENT,
-                                       MAX_WORKERS_PROCESS)
-
-        with ProcessPoolExecutor(MAX_WORKERS_PROCESS) as process_pool:
-            [
-                process_pool.submit(crawl_loop, task, conf, hubs,
-                                    engine.url_pool, queue, lock)
-                for task in tasks
-            ]
-        # 获取待下载链接（单进程）
-        # engine.url_pool = engine.mongo.get_all_list()
-        # tasks = engine.mongo.get_task(conf['pending_threshold'],
-        #                               conf['failure_threshold'],
-        #                               MAX_WORKERS_CONCURRENT,
-        #                               MAX_WORKERS_PROCESS)
-
-        # crawl_loop(tasks, conf, hubs, engine.url_pool, queue, lock)
-        # 打印时间
-        print(f"---------- {time.time()-engine.last_loading_time} ----------")
+def _process(features, hubs, hubs_hosts):
+    link = []
+    document = []
+    parser = Parser()
+    status_code, html, url, _ = features
+    if status_code != 200:
+        return "", ""
+    if url in hubs:
+        link, document = parser.parse_html(status_code, html, url, hubs_hosts)
+    document.extend(parser._get_url_document(html, url))
+    return document, link
 
 
 MAX_WORKERS_PROCESS, MAX_WORKERS_THREAD, MAX_WORKERS_CONCURRENT = 6, 12, 24
 if __name__ == "__main__":
-    try:
-        # lp = LineProfiler()
-        crawl()
-        # lp.print_stats()
-    except KeyboardInterrupt:
-        print('stopped by yourself!')
+    engine = Engine()
+    engine.start_thread()

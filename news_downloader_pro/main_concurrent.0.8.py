@@ -5,20 +5,20 @@
 #AUTHOR: Sancho
 """
 新闻爬虫
-重构：多进程、多线程下载网页，并存储到数据库
+重构：异步下载网页，并存储到数据库
 """
 
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import lzma
-import queue
 import re
 import sys
 import time
 import urllib.parse as urlparse
 import pymongo
-import requests
 import yaml
 from pymongo.mongo_client import MongoClient
+import aiohttp
+import asyncio
+import cchardet
 
 
 class Loader:
@@ -35,8 +35,7 @@ class Loader:
     def load_hubs(self):
         with open(f'{self.path}_hubs.yml', 'r', encoding='utf-8') as f:
             hubs = yaml.load(f, Loader=yaml.CLoader)
-            # REVIEW:只读取前24个hub链接
-            hubs = list(set(hubs))[:24]
+            hubs = list(set(hubs))
         return hubs
 
     def reload_files(self):
@@ -177,11 +176,6 @@ class Mongo:
     def update_many(self, documents):
         [self.update_one(document) for document in documents]
 
-    def update_thread(self, documents, workers):
-        with ThreadPoolExecutor(workers) as thread_pool2:
-            thread_pool2.map(self.update_one, documents)
-        return True
-
     def len_downloaded_documents(self):
         return self.__len__({'html': {"$ne": ""}})
 
@@ -195,17 +189,21 @@ class Downloader:
     def __init__(self) -> None:
         pass
 
-    def fetch(self, session, url, headers=None, timeout=9):
+    async def fetch(self, session, url, headers=None):
         # TODO:UA池
         if isinstance(url, dict):
             url = url['url']
         _headers = headers or self.UA
         try:
-            resp = session.get(url, headers=_headers, timeout=timeout)
-            status = resp.status_code
-            resp.encoding = "utf-8"
-            html = resp.text
-            redirected_url = resp.url
+            async with session.get(url,
+                                   headers=_headers,
+                                   verify_ssl=False,
+                                   timeout=3) as resp:
+                status = resp.status
+                html = await resp.read()
+                encoding = cchardet.detect(html)['encoding']
+                html = html.decode(encoding, errors='ignore')
+                redirected_url = resp.url
         except Exception as e:
             msg = f'Failed download: {url} | exception: {str(type(e))}, {str(e)}'
             print(msg)
@@ -214,12 +212,14 @@ class Downloader:
             redirected_url = url
         return status, html, url, redirected_url
 
-    def crawler(self, session, task, thread_workers):
-        with ThreadPoolExecutor(thread_workers) as thread_pool1:
-            return [
-                thread_pool1.submit(self.fetch, session, url).result()
-                for url in task
-            ]
+    async def crawler(self, session, task):
+        task = [
+            asyncio.create_task(self.fetch(session, url['url']))
+            for url in task
+        ]
+        done, _ = await asyncio.wait(task)
+
+        return [l._result for l in done]
 
 
 class Parser:
@@ -399,41 +399,12 @@ class Engine:
             documents.extend(self.parser._get_url_document(html, url))
         return documents, links
 
-    def start_thread(self):
-        # 多线程函数
+    async def start(self):
+        # 异步函数
+        self.session = aiohttp.ClientSession(loop=self.loop)
         self.last_loading_time = time.time()
-        with requests.session() as session:
-            while 1:
-                # 计时重读配置文件
-                self.refresh_files(60 * 2)
-                # 获取待下载链接
-                self.url_pool = self.mongo.get_all_list()
-                task = self.mongo.get_waiting_urls(
-                    self.conf['pending_threshold'],
-                    self.conf['failure_threshold'], MAX_WORKERS_CONCURRENT)
-                # 执行任务
-                # 下载网页
-
-                features = self.downloader.crawler(session, task,
-                                                   MAX_WORKERS_THREAD)
-                # 解析和添加网页
-                documents, links = self.process(features)
-                # 添加新链接
-                if links:
-                    links = set(links).difference(self.url_pool)
-                    _, document = self.pack_documents('url', links)
-                    documents.extend(document)
-                # 更新数据库
-                self.mongo.update_thread(documents, MAX_WORKERS_THREAD)
-                print(
-                    f"已有页面：{self.mongo.len_downloaded_documents()}/已有链接：{len(self.mongo)}"
-                )
-
-    def start_process(self):
-        # 多进程函数（调用时消耗过大，效率不高）
-        self.last_loading_time = time.time()
-        # while 1:
-        for _ in range(10):
+        while 1:
+            # for _ in range(20):
             # 计时重读配置文件
             self.refresh_files(60 * 2)
             # 获取待下载链接
@@ -443,44 +414,34 @@ class Engine:
                                                MAX_WORKERS_CONCURRENT)
             # 执行任务
             # 下载网页
-            features = self.downloader.crawler(task, MAX_WORKERS_THREAD)
+            features = await self.downloader.crawler(self.session, task)
             # 解析和添加网页
-            with ProcessPoolExecutor(MAX_WORKERS_PROCESS) as process_pool:
-                result = [
-                    process_pool.submit(_process, feature, self.hubs,
-                                        self.hubs_hosts).result()
-                    for feature in features
-                ]
-                documents, links = [], []
-                for document, link in result:
-                    documents.extend(document)
-                    links.extend(link)
+            # NOTE: 20   55433387.0 2771669.4     92.0
+            documents, links = self.process(features)
             # 添加新链接
             if links:
                 links = set(links).difference(self.url_pool)
                 _, document = self.pack_documents('url', links)
                 documents.extend(document)
             # 更新数据库
-            self.mongo.update_thread(documents, MAX_WORKERS_THREAD)
+            # NOTE: 20    3169161.0 158458.0      5.3
+            self.mongo.update_many(documents)
             print(
                 f"已有页面：{self.mongo.len_downloaded_documents()}/已有链接：{len(self.mongo)}"
             )
 
+    def run(self):
+        try:
+            # 协程模块
+            self.loop = asyncio.get_event_loop()
+            self.loop.run_until_complete(self.start())
 
-def _process(features, hubs, hubs_hosts):
-    link = []
-    document = []
-    parser = Parser()
-    status_code, html, url, _ = features
-    if status_code != 200:
-        return "", ""
-    if url in hubs:
-        link, document = parser.parse_html(status_code, html, url, hubs_hosts)
-    document.extend(parser._get_url_document(html, url))
-    return document, link
+        except KeyboardInterrupt:
+            print('stopped by yourself!')
+        self._close()
 
 
 MAX_WORKERS_PROCESS, MAX_WORKERS_THREAD, MAX_WORKERS_CONCURRENT = 6, 12, 24
 if __name__ == "__main__":
     engine = Engine()
-    engine.start_thread()
+    engine.run()

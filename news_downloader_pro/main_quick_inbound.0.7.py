@@ -35,8 +35,7 @@ class Loader:
     def load_hubs(self):
         with open(f'{self.path}_hubs.yml', 'r', encoding='utf-8') as f:
             hubs = yaml.load(f, Loader=yaml.CLoader)
-            # REVIEW:只读取前24个hub链接
-            hubs = list(set(hubs))[:24]
+            hubs = list(set(hubs))
         return hubs
 
     def reload_files(self):

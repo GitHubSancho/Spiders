@@ -1,26 +1,18 @@
-import asyncio
-from pprint import pprint
-import motor.motor_asyncio
+# import speedtest
+# st = speedtest.Speedtest()
+# st.get_best_server()
+# print(f"Your ping is: {st.results.ping} ms")
+# print(f"Your download speed: {round(st.download() / 1000000, 1)} Mbit/s")
+# print(f"Your upload speed: {round(st.upload() / 1000 / 1000, 1)} Mbit/s")
 
-
-class Client:
-    def __init__(self) -> None:
-
-        self.client = motor.motor_asyncio.AsyncIOMotorClient(
-            'mongodb://localhost:27017')
-        self.db = self.client['news_downloader_pro']
-        self.coll = self.db['test110']
-
-    async def do_find_one(self):
-        document = await self.coll.find({})
-        return document
-
-    def dothis(self):
-        a = self.do_find_one()
-        pprint(a)
-
-
-# loop = client.get_io_loop()
-client = Client()
-loop = asyncio.get_event_loop()
-loop.run_until_complete(client.dothis())
+import speedtest
+import psutil
+mem = psutil.virtual_memory()
+# 系统总计内存(单位字节)
+zj = float(mem.total) / 1000000000
+ysy = float(mem.used) / 1000000000
+print((0.8 * zj - ysy) / 0.16 * 24)
+st = speedtest.Speedtest()
+st.get_best_server()
+ns = st.download() / 1000000
+print(ns / 11 * 24)

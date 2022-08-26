@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #-*- coding: utf-8 -*-
-#FILE: main_quick_inbound.0.7.py
+#FILE: main_concurrent.0.9.py
 #CREATE_TIME: 2022-08-23
 #AUTHOR: Sancho
 """
@@ -18,6 +18,7 @@ TODO: 添加：IP池
 
 import random
 import re
+from secrets import choice
 import sys
 import lzma
 import time
@@ -27,6 +28,8 @@ import pymongo
 import aiohttp
 import asyncio
 import cchardet
+import requests
+from lxml import etree
 import urllib.parse as urlparse
 from concurrent.futures import ProcessPoolExecutor
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -226,15 +229,19 @@ class Downloader:
         if ua_list:
             self.ua_list = ua_list
 
-    async def fetch(self, session, url, headers=None):
+    async def fetch(self, session, url, headers=None, proxy=None, timeout=3):
+        html = ''
+        status = 0
+        redirected_url = url
         if isinstance(url, dict):
             url = url['url']
         _headers = headers or random.choice(self.ua_list)
         try:
             async with session.get(url,
                                    headers=_headers,
+                                   proxy=proxy,
                                    verify_ssl=False,
-                                   timeout=3) as resp:
+                                   timeout=timeout) as resp:
                 status = resp.status
                 html = await resp.read()
                 encoding = cchardet.detect(html)['encoding']
@@ -247,15 +254,22 @@ class Downloader:
         except Exception as e:
             msg = f'Failed download: {url} | exception: {str(type(e))}, {str(e)}'
             # print(msg)
-            html = ''
-            status = 0
-            redirected_url = url
-        return status, html, url, redirected_url
+        return status, html, url, redirected_url, proxy
 
-    async def crawler(self, session, task):
+    async def crawler(self, session, task, proxy=None):
         task = [
-            asyncio.create_task(self.fetch(session, url['url']))
+            asyncio.create_task(self.fetch(session, url['url'], proxy=proxy))
             for url in task
+        ]
+        done, _ = await asyncio.wait(task)
+
+        return [l._result for l in done]
+
+    async def test_proxy(self, session, task):
+        task = [
+            asyncio.create_task(
+                self.fetch(session, TEST_URL, proxy=proxy, timeout=10))
+            for proxy in task
         ]
         done, _ = await asyncio.wait(task)
 
@@ -339,6 +353,40 @@ class Parser:
         return list(newlinks)
 
 
+class Proxy:
+    def __init__(self) -> None:
+        pass
+
+    def get_proxy_ip(self):
+        resp = requests.get(PROXYPOOL_URL, params=PROXYPOOL_API_PARAMS)
+        html = resp.text
+        _ip = html.split('</br>')[:-1]
+        return [f'http://{ip}' for ip in _ip]
+
+    def build_proxy_pool(self, proxy):
+        if not proxy:
+            return []
+        self.proxy_pool = {p: 50 for p in proxy}
+        print(f'加载ip：{len(self.proxy_pool)}')
+        return self.proxy_pool
+
+    def sub_proxy_count(self, ip):
+        count = self.proxy_pool.get(ip, None)
+        if count is None:
+            return None
+        elif count <= 0:
+            del self.proxy_pool[ip]
+            return None
+        self.proxy_pool[ip] -= 1
+        return ip
+
+    def choices(self, k):
+        if not self.proxy_pool:
+            return None
+        keys = list(self.proxy_pool.keys())
+        return random.choices(keys, k=k)
+
+
 class Engine:
     def __init__(self) -> None:
         # 读取配置文件
@@ -350,6 +398,7 @@ class Engine:
         # 其它模块
         self.downloader = Downloader(ua_list)
         self.parser = Parser()
+        # self.proxy = Proxy()
         # 初始化变量
         self.failure_pool = {}
 
@@ -390,12 +439,13 @@ class Engine:
 
         return
 
-    def tab_url(self, features):
+    async def tab_url(self, features):
         htmls = []
         urls = {}
         hubs = []
-        for status_code, html, url, _ in features:
+        for status_code, html, url, _0, _1 in features:
             if status_code != 200:  # 标记访问错误
+                # self._proxy = self.proxy.sub_proxy_count(_1)
                 if self.failure_pool.get(url, False):
                     if self.failure_pool[url] >= 3:
                         del self.failure_pool[url]  # 访问失败三次从内存删除
@@ -446,6 +496,12 @@ class Engine:
             documents.extend(links_documents)
         return documents
 
+    async def get_proxy(self):
+        proxy = self.proxy.get_proxy_ip()
+        result = await self.downloader.test_proxy(self.session, proxy)
+        proxy = [t[4] for t in result if t if t[0] == 200]
+        return self.proxy.build_proxy_pool(proxy)
+
     async def start(self):
         # 异步函数
         # 上传初始链接
@@ -454,7 +510,12 @@ class Engine:
         # 初始化变量
         self.session = aiohttp.ClientSession(loop=self.loop)
         self.last_loading_time = time.time()
+        self._proxy = None
+        # assert await self.get_proxy()
+        # self._proxy = self.proxy.choices(1)[0]
+        print("- 开始抓取 -")
         while 1:
+            # for _i in range(5):
             # 计时重读配置文件
             await self.refresh_files(60 * 2)
             # 获取待下载链接
@@ -465,10 +526,14 @@ class Engine:
             # 执行任务
             if not task:
                 continue
+            # if not self._proxy:
+            #     await self.get_proxy()
+            #     self._proxy = self.proxy.choices(1)[0]
             # 下载网页
-            features = await self.downloader.crawler(self.session, task)
+            features = await self.downloader.crawler(self.session, task,
+                                                     self._proxy)
             # 标记链接
-            htmls, hubs, urls = self.tab_url(features)
+            htmls, hubs, urls = await self.tab_url(features)
             # 解析网页
             # NOTE: 20   16863600.0 843180.0     31.9
             good_links = self.extract(htmls)
@@ -515,7 +580,27 @@ def check_memory():
 
 if __name__ == "__main__":
     MAX_WORKERS_CONCURRENT = check_memory()
-
+    # TEST_URL = 'https://www.baidu.com'
+    # PROXYPOOL_URL = 'http://webapi.http.zhimacangku.com/getip'
+    # PROXYPOOL_API_KEY = '262150'
+    # PROXYPOOL_API_PARAMS = {
+    #     'num': 100,
+    #     'type': 3,
+    #     'pro': 0,
+    #     'city': 0,
+    #     'yys': 0,
+    #     'port': 1,
+    #     'time': 1,
+    #     # 'pack': PROXYPOOL_API_KEY,
+    #     'ts': 0,
+    #     'ys': 0,
+    #     'cs': 0,
+    #     'lb': 2,
+    #     'sb': 0,
+    #     'pb': 45,
+    #     'mr': 1,
+    #     'regions': ''
+    # }
     with ProcessPoolExecutor() as process_pool:
         engine = Engine()
         engine.run()
